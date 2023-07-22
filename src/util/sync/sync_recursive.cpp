@@ -12,10 +12,7 @@ namespace dxvk::sync {
       spin(2000, [this] { return try_lock(); });
 
       auto t1 = dxvk::high_resolution_clock::now();
-      uint64_t us  = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
-      if( us > 10 )
-        Logger::debug( std::string(m_name) + " aquire recursive_spinlock did take " + std::to_string(us) + std::string(" us "));
+      m_timeToGetLock  = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 
   }
 
@@ -25,6 +22,9 @@ namespace dxvk::sync {
       m_owner.store(0, std::memory_order_release);
     else
       m_counter -= 1;
+
+    if( m_timeToGetLock > 10 )
+      Logger::debug( std::string(m_name) + " aquire recursive_spinlock did take " + std::to_string(m_timeToGetLock) + std::string(" us "));
   }
 
 

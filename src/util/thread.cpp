@@ -9,33 +9,43 @@
 
 namespace dxvk {
 
-    void mutex::lock() {
+  void mutex::lock() {
 
-      auto t0 = dxvk::high_resolution_clock::now();
+    auto t0 = dxvk::high_resolution_clock::now();
 
-      AcquireSRWLockExclusive(&m_lock);
+    AcquireSRWLockExclusive(&m_lock);
 
-      auto t1 = dxvk::high_resolution_clock::now();
-      uint64_t us  = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    auto t1 = dxvk::high_resolution_clock::now();
+    m_timeToGetLock  = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 
-      if( us > 10 && strcmp(m_name, "log") )
-        Logger::debug( std::string(m_name) + " aquire mutex lock did take " + std::to_string(us) + std::string(" us "));
+  }
 
-    }
+  void mutex::unlock() {
+    ReleaseSRWLockExclusive(&m_lock);
 
-    void recursive_mutex::lock() {
+    if( m_timeToGetLock > 10 && strcmp(m_name, "log") )
+      Logger::debug( std::string(m_name) + " aquire mutex lock did take " + std::to_string(m_timeToGetLock) + std::string(" us "));
+  }
 
-      auto t0 = dxvk::high_resolution_clock::now();
 
-      EnterCriticalSection(&m_lock);
 
-      auto t1 = dxvk::high_resolution_clock::now();
-      uint64_t us  = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  void recursive_mutex::lock() {
 
-      if( us > 10 && strcmp(m_name, "log") )
-        Logger::debug( std::string(m_name) + " aquire recursive_mutex lock did take " + std::to_string(us) + std::string(" us "));
+    auto t0 = dxvk::high_resolution_clock::now();
 
-    }
+    EnterCriticalSection(&m_lock);
+
+    auto t1 = dxvk::high_resolution_clock::now();
+    m_timeToGetLock = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+  }
+
+  void recursive_mutex::unlock() {
+    LeaveCriticalSection(&m_lock);
+
+    if( m_timeToGetLock > 10 && strcmp(m_name, "log") )
+      Logger::debug( std::string(m_name) + " aquire recursive_mutex lock did take " + std::to_string(m_timeToGetLock) + std::string(" us "));
+  }
 
 
   thread::thread(ThreadProc&& proc)

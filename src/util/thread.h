@@ -152,9 +152,7 @@ namespace dxvk {
 
     void lock();
 
-    void unlock() {
-      ReleaseSRWLockExclusive(&m_lock);
-    }
+    void unlock();
 
     bool try_lock() {
       return TryAcquireSRWLockExclusive(&m_lock);
@@ -168,7 +166,7 @@ namespace dxvk {
 
     SRWLOCK m_lock = SRWLOCK_INIT;
     const char* m_name;
-//    uint64_t m_timeToGetLock;
+    uint64_t m_timeToGetLock;
 
   };
 
@@ -198,9 +196,7 @@ namespace dxvk {
 
     void lock();
 
-    void unlock() {
-      LeaveCriticalSection(&m_lock);
-    }
+    void unlock();
 
     bool try_lock() {
       return TryEnterCriticalSection(&m_lock);
@@ -214,6 +210,7 @@ namespace dxvk {
 
     CRITICAL_SECTION m_lock;
     const char* m_name;
+    uint64_t m_timeToGetLock;
 
   };
 
