@@ -122,7 +122,7 @@ namespace dxvk {
     std::priority_queue<QueueItem>  m_queue;
     bool                            m_running    = false;
 
-    dxvk::mutex                     m_mutex;
+    dxvk::mutex                     m_mutex = { "DxvkFence" };
     dxvk::condition_variable        m_condVar;
     dxvk::thread                    m_thread;
 

@@ -129,7 +129,7 @@ namespace dxvk {
     std::optional<VkHdrMetadataEXT> m_hdrMetadata;
     bool m_dirtyHdrMetadata = true;
 
-    dxvk::mutex               m_frameStatisticsLock;
+    dxvk::mutex               m_frameStatisticsLock = { "D3D11SwapChain::FrameStatistics" };
     DXGI_VK_FRAME_STATISTICS  m_frameStatistics = { };
 
     HRESULT PresentImage(UINT SyncInterval);

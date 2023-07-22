@@ -87,7 +87,7 @@ namespace dxvk::sync {
   private:
 
     std::atomic<uint64_t>    m_value;
-    dxvk::mutex              m_mutex;
+    dxvk::mutex              m_mutex = { "Fence" };
     dxvk::condition_variable m_cond;
 
   };
@@ -150,7 +150,7 @@ namespace dxvk::sync {
   private:
 
     std::atomic<uint64_t>    m_value;
-    dxvk::mutex              m_mutex;
+    dxvk::mutex              m_mutex = { "CallbackFence" };
     dxvk::condition_variable m_cond;
 
     std::list<std::pair<uint64_t, std::function<void ()>>> m_callbacks;

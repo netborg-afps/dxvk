@@ -51,7 +51,7 @@ namespace dxvk {
     using TimePoint = dxvk::high_resolution_clock::time_point;
     using TimerDuration = std::chrono::nanoseconds;
 
-    dxvk::mutex     m_mutex;
+    dxvk::mutex     m_mutex = { "FpsLimiter" };
 
     TimerDuration   m_targetInterval  = TimerDuration::zero();
     TimerDuration   m_deviation       = TimerDuration::zero();

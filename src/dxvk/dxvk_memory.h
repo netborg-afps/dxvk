@@ -348,7 +348,7 @@ namespace dxvk {
     DxvkDevice*                                     m_device;
     VkPhysicalDeviceMemoryProperties                m_memProps;
     
-    dxvk::mutex                                     m_mutex;
+    dxvk::mutex                                     m_mutex = { "DxvkMemoryAllocator" };
     std::array<DxvkMemoryHeap, VK_MAX_MEMORY_HEAPS> m_memHeaps;
     std::array<DxvkMemoryType, VK_MAX_MEMORY_TYPES> m_memTypes;
 

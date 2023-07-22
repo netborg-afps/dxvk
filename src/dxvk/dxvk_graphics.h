@@ -585,7 +585,7 @@ namespace dxvk {
     uint32_t m_specConstantMask = 0;
 
     alignas(CACHE_LINE_SIZE)
-    dxvk::mutex                                   m_mutex;
+    dxvk::mutex                                   m_mutex = { "DxvkGraphicsPipeline::m_mutex" };
     sync::List<DxvkGraphicsPipelineInstance>      m_pipelines;
     uint32_t                                      m_useCount = 0;
 
@@ -594,7 +594,7 @@ namespace dxvk {
       VkPipeline, DxvkHash, DxvkEq>               m_basePipelines;
 
     alignas(CACHE_LINE_SIZE)
-    dxvk::mutex                                   m_fastMutex;
+    dxvk::mutex                                   m_fastMutex { "DxvkGraphicsPipeline::m_fastMutex" };
     std::unordered_map<
       DxvkGraphicsPipelineFastInstanceKey,
       VkPipeline, DxvkHash, DxvkEq>               m_fastPipelines;

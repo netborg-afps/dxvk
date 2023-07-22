@@ -301,7 +301,7 @@ namespace dxvk {
 
     DxvkMemoryAllocator*              m_memory;
 
-    dxvk::mutex                       m_mutex;
+    dxvk::mutex                       m_mutex = { "DxvkSparsePageAllocator" };
     uint32_t                          m_pageCount = 0u;
     uint32_t                          m_useCount = 0u;
     std::vector<Rc<DxvkSparsePage>>   m_pages;

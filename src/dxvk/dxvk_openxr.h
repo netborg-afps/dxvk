@@ -37,7 +37,7 @@ namespace dxvk {
 
   private:
 
-    dxvk::mutex           m_mutex;
+    dxvk::mutex           m_mutex = { "DxvkXrProvider" };
     HMODULE               m_wineOxr     = nullptr;
 
     bool m_loadedOxrApi      = false;

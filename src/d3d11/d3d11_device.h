@@ -581,7 +581,7 @@ namespace dxvk {
     ID3D11ShaderResourceView* HandleToSrvNVX(
             uint32_t                  Handle);
     
-    dxvk::mutex m_mapLock;
+    dxvk::mutex m_mapLock = { "D3D11DeviceExt" };
     std::unordered_map<uint32_t, ID3D11SamplerState*> m_samplerHandleToPtr;
     std::unordered_map<uint32_t, ID3D11ShaderResourceView*> m_srvHandleToPtr;
   };

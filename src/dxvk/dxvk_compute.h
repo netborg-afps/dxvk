@@ -134,7 +134,7 @@ namespace dxvk {
     DxvkBindingLayoutObjects*   m_bindings;
     
     alignas(CACHE_LINE_SIZE)
-    dxvk::mutex                             m_mutex;
+    dxvk::mutex                             m_mutex = { "DxvkComputePipeline" };
     sync::List<DxvkComputePipelineInstance> m_pipelines;
     
     DxvkComputePipelineInstance* createInstance(

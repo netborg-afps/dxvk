@@ -51,7 +51,7 @@ namespace dxvk {
     const LogLevel    m_minLevel;
     const std::string m_fileName;
     
-    dxvk::mutex       m_mutex;
+    dxvk::mutex       m_mutex = { "log" };
     std::ofstream     m_fileStream;
 
     bool              m_initialized = false;

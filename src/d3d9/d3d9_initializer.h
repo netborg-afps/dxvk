@@ -33,7 +33,7 @@ namespace dxvk {
     
   private:
 
-    dxvk::mutex       m_mutex;
+    dxvk::mutex       m_mutex = { "D3D9Initializer" };
 
     Rc<DxvkDevice>    m_device;
     Rc<DxvkContext>   m_context;

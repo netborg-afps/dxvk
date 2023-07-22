@@ -240,7 +240,7 @@ namespace dxvk {
     uint32_t                            m_maxSets = 0;
     DxvkRecycler<DxvkDescriptorPool, 8> m_pools;
 
-    dxvk::mutex                         m_mutex;
+    dxvk::mutex                         m_mutex = { "DxvkDescriptorManager" };
     std::array<VkDescriptorPool, 8>     m_vkPools;
     size_t                              m_vkPoolCount = 0;
 

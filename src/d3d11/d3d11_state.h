@@ -70,7 +70,7 @@ namespace dxvk {
     
   private:
     
-    dxvk::mutex                                m_mutex;
+    dxvk::mutex                                m_mutex = { "D3D11StateObjectSet" };
     std::unordered_map<DescType, T,
       D3D11StateDescHash, D3D11StateDescEqual> m_objects;
     

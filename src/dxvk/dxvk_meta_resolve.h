@@ -120,7 +120,7 @@ namespace dxvk {
     VkShaderModule m_shaderFragD = VK_NULL_HANDLE;
     VkShaderModule m_shaderFragDS = VK_NULL_HANDLE;
 
-    dxvk::mutex m_mutex;
+    dxvk::mutex m_mutex = { "DxvkMetaResolvePipeline" };
 
     std::unordered_map<
       DxvkMetaResolvePipelineKey,

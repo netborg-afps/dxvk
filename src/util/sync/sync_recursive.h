@@ -16,6 +16,9 @@ namespace dxvk::sync {
 
   public:
 
+    RecursiveSpinlock( const char* name = "" )
+    : m_name( name ) {}
+
     void lock();
 
     void unlock();
@@ -26,6 +29,7 @@ namespace dxvk::sync {
 
     std::atomic<uint32_t> m_owner   = { 0u };
     uint32_t              m_counter = { 0u };
+    const char*           m_name;
     
   };
 

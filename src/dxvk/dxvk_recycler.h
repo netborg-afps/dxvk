@@ -54,7 +54,7 @@ namespace dxvk {
     
   private:
     
-    dxvk::mutex           m_mutex;
+    dxvk::mutex           m_mutex = { "DxvkRecycler" };
     std::array<Rc<T>, N>  m_objects;
 
     uint64_t              m_get = 0;

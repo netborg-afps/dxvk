@@ -20,7 +20,7 @@ namespace dxvk {
 #endif
 
   LUID GetAdapterLUID(UINT Adapter) {
-    static dxvk::mutex       s_mutex;
+    static dxvk::mutex       s_mutex = { "GetAdapterLUID" };
     static std::vector<LUID> s_luids;
 
     std::lock_guard<dxvk::mutex> lock(s_mutex);

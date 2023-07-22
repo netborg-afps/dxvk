@@ -166,7 +166,7 @@ namespace dxvk {
     FragShaders m_depth;
     FragShaders m_depthStencil;
 
-    dxvk::mutex m_mutex;
+    dxvk::mutex m_mutex = { "DxvkMetaCopyPipeline" };
 
     std::unordered_map<
       DxvkMetaCopyPipelineKey,

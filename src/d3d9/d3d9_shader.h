@@ -199,7 +199,7 @@ namespace dxvk {
     
   private:
     
-    dxvk::mutex m_mutex;
+    dxvk::mutex m_mutex = { "D3D9ShaderModuleSet" };
     
     std::unordered_map<
       DxvkShaderKey,

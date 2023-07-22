@@ -15,7 +15,7 @@ namespace dxvk
     D3D9SwapChainEx* swapchain;
   };
 
-  static dxvk::recursive_mutex g_windowProcMapMutex;
+  static dxvk::recursive_mutex g_windowProcMapMutex = { "g_windowProcMapMutex" };
   static std::unordered_map<HWND, D3D9WindowData> g_windowProcMap;
 
   D3D9WindowMessageFilter::D3D9WindowMessageFilter(HWND window, bool filter)

@@ -551,13 +551,13 @@ namespace dxvk {
           DxvkShaderSet             m_shaders;
     const DxvkBindingLayoutObjects* m_layout;
 
-    dxvk::mutex     m_mutex;
+    dxvk::mutex     m_mutex = { "DxvkShaderPipelineLibrary::m_mutex" };
     VkPipeline      m_pipeline             = VK_NULL_HANDLE;
     VkPipeline      m_pipelineNoDepthClip  = VK_NULL_HANDLE;
     uint32_t        m_useCount             = 0u;
     bool            m_compiledOnce         = false;
 
-    dxvk::mutex                 m_identifierMutex;
+    dxvk::mutex                 m_identifierMutex = { "DxvkShaderPipelineLibrary::m_identifierMutex" };
     DxvkShaderIdentifierSet     m_identifiers;
 
     void destroyShaderPipelinesLocked();

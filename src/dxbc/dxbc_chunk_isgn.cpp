@@ -84,17 +84,17 @@ namespace dxvk {
   }
 
   void DxbcIsgn::printEntries() const {
-    for (auto entry = this->begin(); entry != this->end(); entry++) {
-          Logger::debug(str::format("SGN Entry:\n\t",
-            "semanticName: ",  entry->semanticName, "\n\t",
-            "semanticIndex: ", entry->semanticIndex, "\n\t",
-            "registerId: ",    entry->registerId, "\n\t",
-            "componentMask: ", entry->componentMask.maskString(), "\n\t",
-            "componentType: ", entry->componentType, "\n\t",
-            "systemValue: ",   entry->systemValue, "\n\t",
-            "streamId: ",      entry->streamId, "\n",
-            "\n"));
-    }
+//    for (auto entry = this->begin(); entry != this->end(); entry++) {
+//          Logger::debug(str::format("SGN Entry:\n\t",
+//            "semanticName: ",  entry->semanticName, "\n\t",
+//            "semanticIndex: ", entry->semanticIndex, "\n\t",
+//            "registerId: ",    entry->registerId, "\n\t",
+//            "componentMask: ", entry->componentMask.maskString(), "\n\t",
+//            "componentType: ", entry->componentType, "\n\t",
+//            "systemValue: ",   entry->systemValue, "\n\t",
+//            "streamId: ",      entry->streamId, "\n",
+//            "\n"));
+//    }
   }
 
 

@@ -1,10 +1,22 @@
 #include "sync_recursive.h"
 #include "sync_spinlock.h"
 
+#include "util_time.h"
+#include "log/log.h"
+
 namespace dxvk::sync {
 
   void RecursiveSpinlock::lock() {
-    spin(2000, [this] { return try_lock(); });
+      auto t0 = dxvk::high_resolution_clock::now();
+
+      spin(2000, [this] { return try_lock(); });
+
+      auto t1 = dxvk::high_resolution_clock::now();
+      uint64_t us  = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+
+      if( us > 10 )
+        Logger::debug( std::string(m_name) + " aquire recursive_spinlock did take " + std::to_string(us) + std::string(" us "));
+
   }
 
 

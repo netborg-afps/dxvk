@@ -4,7 +4,7 @@
 
 namespace dxvk {
 
-  dxvk::mutex                  g_linkerSlotMutex;
+  dxvk::mutex                  g_linkerSlotMutex = { "dxso_linkerSlot" };
   uint32_t                     g_linkerSlotCount = 0;
   std::array<DxsoSemantic, 32> g_linkerSlots;
 

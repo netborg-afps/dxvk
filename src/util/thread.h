@@ -7,6 +7,7 @@
 #include <thread>
 #include <utility>
 
+
 #include "util_error.h"
 
 #include "./com/com_include.h"
@@ -144,14 +145,12 @@ namespace dxvk {
 
     using native_handle_type = PSRWLOCK;
 
-    mutex() { }
+    mutex( const char* name = "" ) : m_name(name) { }
 
     mutex(const mutex&) = delete;
     mutex& operator = (const mutex&) = delete;
 
-    void lock() {
-      AcquireSRWLockExclusive(&m_lock);
-    }
+    void lock();
 
     void unlock() {
       ReleaseSRWLockExclusive(&m_lock);
@@ -168,6 +167,8 @@ namespace dxvk {
   private:
 
     SRWLOCK m_lock = SRWLOCK_INIT;
+    const char* m_name;
+//    uint64_t m_timeToGetLock;
 
   };
 
@@ -184,7 +185,7 @@ namespace dxvk {
 
     using native_handle_type = PCRITICAL_SECTION;
 
-    recursive_mutex() {
+    recursive_mutex(const char* name = "" ) : m_name(name) {
       InitializeCriticalSection(&m_lock);
     }
 
@@ -195,9 +196,7 @@ namespace dxvk {
     recursive_mutex(const recursive_mutex&) = delete;
     recursive_mutex& operator = (const recursive_mutex&) = delete;
 
-    void lock() {
-      EnterCriticalSection(&m_lock);
-    }
+    void lock();
 
     void unlock() {
       LeaveCriticalSection(&m_lock);
@@ -214,6 +213,7 @@ namespace dxvk {
   private:
 
     CRITICAL_SECTION m_lock;
+    const char* m_name;
 
   };
 

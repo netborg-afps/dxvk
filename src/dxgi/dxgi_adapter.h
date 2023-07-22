@@ -115,7 +115,7 @@ namespace dxvk {
     UINT              m_index;
     UINT64            m_memReservation[2] = { 0, 0 };
 
-    dxvk::mutex                       m_mutex;
+    dxvk::mutex                       m_mutex = { "DxgiAdapter" };
     dxvk::condition_variable          m_cond;
 
     DWORD                             m_eventCookie = 0;

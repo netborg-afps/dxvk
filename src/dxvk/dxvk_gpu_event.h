@@ -111,7 +111,7 @@ namespace dxvk {
   private:
 
     Rc<vk::DeviceFn>     m_vkd;
-    dxvk::mutex          m_mutex;
+    dxvk::mutex          m_mutex = { "DxvkGpuEventPool" };
     std::vector<VkEvent> m_events;
 
   };

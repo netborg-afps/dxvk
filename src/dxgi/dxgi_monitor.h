@@ -49,7 +49,7 @@ namespace dxvk {
     IUnknown* m_parent;
     const DxgiOptions& m_options;
 
-    dxvk::mutex                                        m_monitorMutex;
+    dxvk::mutex                                        m_monitorMutex = { "DxgiMonitorInfo" };
     std::unordered_map<HMONITOR, DXGI_VK_MONITOR_DATA> m_monitorData;
 
     std::atomic<DXGI_COLOR_SPACE_TYPE> m_globalColorSpace;

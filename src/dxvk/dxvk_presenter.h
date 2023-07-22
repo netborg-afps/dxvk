@@ -249,7 +249,7 @@ namespace dxvk {
 
     FpsLimiter        m_fpsLimiter;
 
-    dxvk::mutex                 m_frameMutex;
+    dxvk::mutex                 m_frameMutex  = { "DxvkPresenter" };
     dxvk::condition_variable    m_frameCond;
     dxvk::thread                m_frameThread;
     std::queue<PresenterFrame>  m_frameQueue;

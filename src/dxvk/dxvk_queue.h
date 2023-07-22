@@ -184,8 +184,8 @@ namespace dxvk {
     std::atomic<bool>           m_stopped = { false };
     std::atomic<uint64_t>       m_gpuIdle = { 0ull };
 
-    dxvk::mutex                 m_mutex;
-    dxvk::mutex                 m_mutexQueue;
+    dxvk::mutex                 m_mutex = { "DxvkSubmissionQueue" };
+    dxvk::mutex                 m_mutexQueue = { "DxvkSubmissionQueue::Device" };
     
     dxvk::condition_variable    m_appendCond;
     dxvk::condition_variable    m_submitCond;

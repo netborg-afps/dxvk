@@ -32,7 +32,7 @@ namespace dxvk {
 
   private:
 
-    dxvk::mutex        m_mutex;
+    dxvk::mutex        m_mutex = { "Lazy" };
     std::unique_ptr<T> m_object;
 
   };

@@ -59,7 +59,7 @@ namespace dxvk {
     private:
       D3D9MemoryChunk(D3D9MemoryAllocator* Allocator, uint32_t Size);
 
-      dxvk::mutex m_mutex;
+      dxvk::mutex m_mutex = { "D3D9MemoryChunk" };
       D3D9MemoryAllocator* m_allocator;
       HANDLE m_mapping;
       uint32_t m_size;
@@ -117,7 +117,7 @@ namespace dxvk {
       uint32_t MemoryGranularity() { return m_allocationGranularity; }
 
     private:
-      dxvk::mutex m_mutex;
+      dxvk::mutex m_mutex = { "D3D9MemoryAllocator" };
       std::vector<std::unique_ptr<D3D9MemoryChunk>> m_chunks;
       std::atomic<size_t> m_mappedMemory = 0;
       std::atomic<size_t> m_allocatedMemory = 0;

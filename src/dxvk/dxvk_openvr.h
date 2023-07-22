@@ -43,7 +43,7 @@ namespace dxvk {
 
   private:
 
-    dxvk::mutex           m_mutex;
+    dxvk::mutex           m_mutex = { "VrInstance" };
     HKEY                  m_vr_key     = nullptr;
     vr::IVRCompositor*    m_compositor = nullptr;
     HMODULE               m_ovrApi     = nullptr;

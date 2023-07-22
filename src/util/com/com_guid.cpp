@@ -29,7 +29,7 @@ namespace dxvk {
     }
   };
 
-  dxvk::mutex                                    g_loggedQueryInterfaceErrorMutex;
+  dxvk::mutex                                    g_loggedQueryInterfaceErrorMutex = { "g_loggedQueryInterfaceErrorMutex" };
   std::unordered_set<GuidPair, DxvkHash, DxvkEq> g_loggedQueryInterfaceErrors;
 
   bool logQueryInterfaceError(REFIID objectGuid, REFIID requestedGuid) {

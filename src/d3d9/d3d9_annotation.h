@@ -46,7 +46,7 @@ namespace dxvk {
 
     std::atomic<bool> m_shouldAnnotate;
 
-    dxvk::mutex m_mutex;
+    dxvk::mutex m_mutex = { "D3D9GlobalAnnotationList" };
     std::vector<IDXVKUserDefinedAnnotation*> m_annotations;
 
     // Provide our own event depth as we

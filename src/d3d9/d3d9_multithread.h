@@ -70,7 +70,7 @@ namespace dxvk {
 
     BOOL            m_protected;
 
-    sync::RecursiveSpinlock m_mutex;
+    sync::RecursiveSpinlock m_mutex = { "D3D9Multithread" };
 
   };
 

@@ -172,8 +172,8 @@ namespace dxvk {
     
   private:
     
-    dxvk::recursive_mutex           m_lockWindow;
-    dxvk::mutex                     m_lockBuffer;
+    dxvk::recursive_mutex           m_lockWindow = { "DxgiSwapChain::m_lockWindow" };
+    dxvk::mutex                     m_lockBuffer = { "DxgiSwapChain::m_lockBuffer" };
 
     Com<DxgiFactory>                m_factory;
     Com<IDXGIAdapter>               m_adapter;
