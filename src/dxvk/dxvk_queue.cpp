@@ -1,88 +1,133 @@
 #include "dxvk_device.h"
 #include "dxvk_queue.h"
+#include <boost/lockfree/queue.hpp>
 
 namespace dxvk {
+
+  class DxvkSubmitEntryPool {
+  public:
+    DxvkSubmitEntryPool( int numEntries );
+    ~DxvkSubmitEntryPool();
+
+    DxvkSubmitEntry* acquire();
+    void release( DxvkSubmitEntry* entry );
+
+  private:
+    DxvkSubmissionQueue::lockfree_queue_t* m_queue;
+    DxvkSubmitEntry* m_entries;
+  };
+
+
+  DxvkSubmitEntryPool::DxvkSubmitEntryPool(int numEntries) {
+    assert( numEntries <= 32 );
+    m_queue = new DxvkSubmissionQueue::lockfree_queue_t();
+
+    m_entries = new DxvkSubmitEntry[numEntries]();
+    for( int i=0; i<numEntries; ++i ) {
+      m_queue->push( &m_entries[i] );
+    }
+  }
+
+
+  DxvkSubmitEntryPool::~DxvkSubmitEntryPool() {
+    delete m_queue;
+    delete m_entries;
+  }
+
+
+  DxvkSubmitEntry* DxvkSubmitEntryPool::acquire() {
+    DxvkSubmitEntry* res;
+
+    // TODO: add atomic sync
+    while( !m_queue->pop(res) ) {}
+
+    *res = {};
+    return res;
+  }
+
+
+  void DxvkSubmitEntryPool::release(DxvkSubmitEntry* entry) {
+    while( !m_queue->push(entry) ) {}
+  }
+
+
   
   DxvkSubmissionQueue::DxvkSubmissionQueue(DxvkDevice* device, const DxvkQueueCallback& callback)
   : m_device(device), m_callback(callback),
     m_submitThread([this] () { submitCmdLists(); }),
     m_finishThread([this] () { finishCmdLists(); }) {
 
+    m_submitEntryPool = new DxvkSubmitEntryPool( MaxNumQueuedCommandBuffers );
+    m_lfFinishQueue   = new lockfree_queue_t;
+    m_lfSubmitQueue   = new lockfree_queue_t;
   }
   
   
   DxvkSubmissionQueue::~DxvkSubmissionQueue() {
     auto vk = m_device->vkd();
 
-    { std::unique_lock<dxvk::mutex> lock(m_mutex);
-      m_stopped.store(true);
-    }
-
-    m_appendCond.notify_all();
-    m_submitCond.notify_all();
+    m_stopped.store(true);
+    m_finishSyncIsFilled.signal_one();
+    m_finishSyncIsEmpty.signal_one();
+    m_submitSyncIsEmpty.signal_all();
+    m_appendSync.signal_one();
+    m_submitSync.signal_one();
+    m_finishSync.signal_all();
 
     m_submitThread.join();
     m_finishThread.join();
+
+    delete m_lfFinishQueue;
+    delete m_lfSubmitQueue;
+    delete m_submitEntryPool;
   }
   
   
   void DxvkSubmissionQueue::submit(DxvkSubmitInfo submitInfo, DxvkSubmitStatus* status) {
-    std::unique_lock<dxvk::mutex> lock(m_mutex);
+    DxvkSubmitEntry* pEntry = m_submitEntryPool->acquire();
+    pEntry->status = status;
+    pEntry->submit = std::move(submitInfo);
 
-    m_finishCond.wait(lock, [this] {
-      return m_submitQueue.size() + m_finishQueue.size() <= MaxNumQueuedCommandBuffers;
-    });
-
-    DxvkSubmitEntry entry = { };
-    entry.status = status;
-    entry.submit = std::move(submitInfo);
-
-    m_submitQueue.push(std::move(entry));
-    m_appendCond.notify_all();
+    m_lfSubmitQueue->push( pEntry );
+    m_submitSyncIsEmpty.clear();
+    m_appendSync.signal_one();
   }
 
 
   void DxvkSubmissionQueue::present(DxvkPresentInfo presentInfo, DxvkSubmitStatus* status) {
-    std::unique_lock<dxvk::mutex> lock(m_mutex);
+    DxvkSubmitEntry* pEntry= m_submitEntryPool->acquire();
+    pEntry->status = status;
+    pEntry->present = std::move(presentInfo);
 
-    DxvkSubmitEntry entry = { };
-    entry.status  = status;
-    entry.present = std::move(presentInfo);
-
-    m_submitQueue.push(std::move(entry));
-    m_appendCond.notify_all();
+    m_lfSubmitQueue->push( pEntry );
+    m_submitSyncIsEmpty.clear();
+    m_appendSync.signal_one();
   }
 
 
   void DxvkSubmissionQueue::synchronizeSubmission(
           DxvkSubmitStatus*   status) {
-    std::unique_lock<dxvk::mutex> lock(m_mutex);
-
-    m_submitCond.wait(lock, [status] {
-      return status->result.load() != VK_NOT_READY;
-    });
+    while (status->result.load() == VK_NOT_READY) { // TODO: add !m_stopped.load() here?
+      m_submitSync.wait();
+    }
   }
 
 
   void DxvkSubmissionQueue::synchronize() {
-    std::unique_lock<dxvk::mutex> lock(m_mutex);
-
-    m_submitCond.wait(lock, [this] {
-      return m_submitQueue.empty();
-    });
+    while (!m_stopped.load() && !m_lfSubmitQueue->empty()) {
+      m_submitSyncIsEmpty.wait();
+    }
   }
 
 
   void DxvkSubmissionQueue::waitForIdle() {
-    std::unique_lock<dxvk::mutex> lock(m_mutex);
+    while (!m_stopped.load() && !m_lfSubmitQueue->empty()) {
+      m_submitSyncIsEmpty.wait();
+    }
 
-    m_submitCond.wait(lock, [this] {
-      return m_submitQueue.empty();
-    });
-
-    m_finishCond.wait(lock, [this] {
-      return m_finishQueue.empty();
-    });
+    while (!m_stopped.load() && !m_lfFinishQueue->empty()) {
+      m_finishSyncIsEmpty.wait();
+    }
   }
 
 
@@ -105,18 +150,16 @@ namespace dxvk {
   void DxvkSubmissionQueue::submitCmdLists() {
     env::setThreadName("dxvk-submit");
 
-    std::unique_lock<dxvk::mutex> lock(m_mutex);
-
     while (!m_stopped.load()) {
-      m_appendCond.wait(lock, [this] {
-        return m_stopped.load() || !m_submitQueue.empty();
-      });
+      DxvkSubmitEntry* pEntry = nullptr;
+      while (!m_stopped.load() && !m_lfSubmitQueue->pop(pEntry)) {
+        m_appendSync.wait();
+      }
       
       if (m_stopped.load())
         return;
-      
-      DxvkSubmitEntry entry = std::move(m_submitQueue.front());
-      lock.unlock();
+
+      DxvkSubmitEntry& entry = *pEntry;
 
       // Submit command buffer to device
       if (m_lastError != VK_ERROR_DEVICE_LOST) {
@@ -140,15 +183,15 @@ namespace dxvk {
 
       if (entry.status)
         entry.status->result = entry.result;
-      
-      // On success, pass it on to the queue thread
-      lock = std::unique_lock<dxvk::mutex>(m_mutex);
 
       bool doForward = (entry.result == VK_SUCCESS) ||
         (entry.present.presenter != nullptr && entry.result != VK_ERROR_DEVICE_LOST);
 
       if (doForward) {
-        m_finishQueue.push(std::move(entry));
+        m_lfFinishQueue->push( pEntry );
+        m_finishSyncIsEmpty.clear();
+        m_finishSyncIsFilled.signal_one();
+
       } else {
         Logger::err(str::format("DxvkSubmissionQueue: Command submission failed: ", entry.result));
         m_lastError = entry.result;
@@ -157,8 +200,11 @@ namespace dxvk {
           m_device->waitForIdle();
       }
 
-      m_submitQueue.pop();
-      m_submitCond.notify_all();
+      if( m_lfSubmitQueue->empty() ) {
+        m_submitSyncIsEmpty.signal_all();
+      }
+
+      m_submitSync.signal_one();
     }
   }
   
@@ -167,24 +213,19 @@ namespace dxvk {
     env::setThreadName("dxvk-queue");
 
     while (!m_stopped.load()) {
-      std::unique_lock<dxvk::mutex> lock(m_mutex);
 
-      if (m_finishQueue.empty()) {
+      DxvkSubmitEntry* pEntry = nullptr;
+      while (!m_stopped.load() && !m_lfFinishQueue->pop(pEntry)) {
         auto t0 = dxvk::high_resolution_clock::now();
-
-        m_submitCond.wait(lock, [this] {
-          return m_stopped.load() || !m_finishQueue.empty();
-        });
-
+        m_finishSyncIsFilled.wait();
         auto t1 = dxvk::high_resolution_clock::now();
         m_gpuIdle += std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
       }
 
       if (m_stopped.load())
         return;
-      
-      DxvkSubmitEntry entry = std::move(m_finishQueue.front());
-      lock.unlock();
+
+      DxvkSubmitEntry& entry = *pEntry;
       
       if (entry.submit.cmdList != nullptr) {
         VkResult status = m_lastError.load();
@@ -213,16 +254,19 @@ namespace dxvk {
       if (entry.submit.cmdList != nullptr)
         entry.submit.cmdList->notifyObjects();
 
-      lock.lock();
-      m_finishQueue.pop();
-      m_finishCond.notify_all();
-      lock.unlock();
+      if( m_lfFinishQueue->empty() ) {
+          m_finishSyncIsEmpty.signal_one();
+      }
+
+      m_finishSync.signal_all();
 
       // Free the command list and associated objects now
       if (entry.submit.cmdList != nullptr) {
         entry.submit.cmdList->reset();
         m_device->recycleCommandList(entry.submit.cmdList);
       }
+
+      m_submitEntryPool->release(pEntry);
     }
   }
   
