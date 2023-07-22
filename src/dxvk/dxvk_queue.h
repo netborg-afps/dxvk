@@ -1,9 +1,10 @@
 #pragma once
 
-#include <condition_variable>
 #include <mutex>
 #include <queue>
+#include <boost/lockfree/lockfree_forward.hpp>
 
+#include "../util/sync/sync_atomic_signal.h"
 #include "../util/thread.h"
 
 #include "dxvk_cmdlist.h"
@@ -12,6 +13,7 @@
 namespace dxvk {
   
   class DxvkDevice;
+  class DxvkSubmitEntryPool;
 
   /**
    * \brief Submission status
@@ -147,8 +149,9 @@ namespace dxvk {
      */
     template<typename Pred>
     void synchronizeUntil(const Pred& pred) {
-      std::unique_lock<dxvk::mutex> lock(m_mutex);
-      m_finishCond.wait(lock, pred);
+      while( !m_stopped && !pred() ) {
+        m_finishSync.wait();
+      }
     }
 
     /**
@@ -173,7 +176,9 @@ namespace dxvk {
      * queue used for command buffer submission.
      */
     void unlockDeviceQueue();
-    
+
+    typedef boost::lockfree::queue<DxvkSubmitEntry*, boost::lockfree::capacity<32>, boost::lockfree::fixed_sized<true> > lockfree_queue_t;
+
   private:
 
     DxvkDevice*                 m_device;
@@ -184,15 +189,20 @@ namespace dxvk {
     std::atomic<bool>           m_stopped = { false };
     std::atomic<uint64_t>       m_gpuIdle = { 0ull };
 
-    dxvk::mutex                 m_mutex;
     dxvk::mutex                 m_mutexQueue;
-    
-    dxvk::condition_variable    m_appendCond;
-    dxvk::condition_variable    m_submitCond;
-    dxvk::condition_variable    m_finishCond;
 
-    std::queue<DxvkSubmitEntry> m_submitQueue;
-    std::queue<DxvkSubmitEntry> m_finishQueue;
+    dxvk::sync::AtomicSignal    m_finishSync          = { "finish_sync", false };
+    dxvk::sync::AtomicSignal    m_finishSyncIsFilled  = { "finish_sync_is_filled", false };
+    dxvk::sync::AtomicSignal    m_finishSyncIsEmpty   = { "finish_sync_is_empty", true };
+    dxvk::sync::AtomicSignal    m_submitSyncIsEmpty   = { "submit_sync_is_empty", true };
+    dxvk::sync::AtomicSignal    m_submitSync          = { "submit_sync", false };
+    dxvk::sync::AtomicSignal    m_appendSync          = { "append_sync", false };
+
+    alignas(64)
+    lockfree_queue_t*           m_lfFinishQueue;
+    lockfree_queue_t*           m_lfSubmitQueue;
+
+    DxvkSubmitEntryPool*        m_submitEntryPool;
 
     dxvk::thread                m_submitThread;
     dxvk::thread                m_finishThread;
