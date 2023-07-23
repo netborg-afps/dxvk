@@ -9,8 +9,23 @@
 
 namespace dxvk {
 
-  void mutex::lock() {
+  static const uint64_t logging_threshold = 20;
+  static auto start = dxvk::high_resolution_clock::now();
+  std::string getTimestamp() {
+    auto t = dxvk::high_resolution_clock::now();
+    uint64_t duration = std::chrono::duration_cast<std::chrono::milliseconds>(t - start).count();
+    uint64_t s = duration / 1000;
+    uint64_t ms = duration % 1000;
 
+    auto str_ms = std::to_string(ms);
+    if( ms < 10 ) str_ms.insert(0, "00");
+    else if( ms < 100 ) str_ms.insert(0, "0");
+
+    return std::to_string(s) + "." + str_ms + ": ";
+  }
+
+
+  void mutex::lock() {
     auto t0 = dxvk::high_resolution_clock::now();
 
     AcquireSRWLockExclusive(&m_lock);
@@ -20,32 +35,36 @@ namespace dxvk {
 
   }
 
+
   void mutex::unlock() {
     ReleaseSRWLockExclusive(&m_lock);
 
-    if( m_timeToGetLock > 10 && strcmp(m_name, "log") )
-      Logger::debug( std::string(m_name) + " aquire mutex lock did take " + std::to_string(m_timeToGetLock) + std::string(" us "));
+    if( m_timeToGetLock > logging_threshold && strcmp(m_name, "log") ) {
+      Logger::debug( getTimestamp() + std::string(m_name) + " aquire mutex lock did take "
+        + std::to_string(m_timeToGetLock) + std::string(" us "));
+    }
   }
 
 
-
   void recursive_mutex::lock() {
-
     auto t0 = dxvk::high_resolution_clock::now();
 
     EnterCriticalSection(&m_lock);
 
     auto t1 = dxvk::high_resolution_clock::now();
     m_timeToGetLock = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-
   }
+
 
   void recursive_mutex::unlock() {
     LeaveCriticalSection(&m_lock);
 
-    if( m_timeToGetLock > 10 && strcmp(m_name, "log") )
-      Logger::debug( std::string(m_name) + " aquire recursive_mutex lock did take " + std::to_string(m_timeToGetLock) + std::string(" us "));
+    if( m_timeToGetLock > logging_threshold ) {
+    Logger::debug( getTimestamp() + std::string(m_name) + " aquire recursive_mutex lock did take "
+        + std::to_string(m_timeToGetLock) + std::string(" us "));
+    }
   }
+
 
 
   thread::thread(ThreadProc&& proc)
