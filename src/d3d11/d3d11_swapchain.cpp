@@ -655,7 +655,7 @@ namespace dxvk {
 
   void D3D11SwapChain::SyncFrameLatency() {
     // Wait for the sync event so that we respect the maximum frame latency
-    m_frameLatencySignal->wait(m_frameId - GetActualFrameLatency());
+    m_frameLatencySignal->wait(m_frameId);// - GetActualFrameLatency());
 
     m_frameLatencySignal->setCallback(m_frameId, [this,
       cFrameId           = m_frameId,
