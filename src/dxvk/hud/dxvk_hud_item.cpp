@@ -839,7 +839,9 @@ namespace dxvk::hud {
           HudRenderer&      renderer,
           HudPos            position) {
 
-    uint64_t us = std::min( 99999ull, m_us.load() );
+    uint64_t max_us = 99999;
+    uint64_t us = m_us.load();
+    us = std::min( max_us, us );
 
     auto str_us = std::to_string(us);
     if( m_us < 10 ) str_us.insert(0, "    ");
