@@ -4,12 +4,19 @@
 #include "util_likely.h"
 #include "log/log.h"
 #include "util_time.h"
+#include "../dxvk/hud/dxvk_hud_item.h"
+
+std::atomic<const char*> dxvk::hud::HudDebugStallsItem::m_name = {   "" };
+std::atomic<uint64_t>    dxvk::hud::HudDebugStallsItem::m_us   = { 0ull };
+std::atomic<uint64_t>    dxvk::hud::HudDebugStallsItem::m_timestamp_ms = { 0ull };
+dxvk::high_resolution_clock::time_point dxvk::hud::HudDebugStallsItem::m_startTime = dxvk::high_resolution_clock::now();
 
 #ifdef _WIN32
 
 namespace dxvk {
 
   static const uint64_t logging_threshold = 20;
+  static const uint64_t print_hud_threshold = 100;
   static auto start = dxvk::high_resolution_clock::now();
   std::string getTimestamp() {
     auto t = dxvk::high_resolution_clock::now();
@@ -33,6 +40,14 @@ namespace dxvk {
     auto t1 = dxvk::high_resolution_clock::now();
     m_timeToGetLock  = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
 
+    if( m_timeToGetLock > print_hud_threshold && m_timeToGetLock > dxvk::hud::HudDebugStallsItem::m_us ) {
+      dxvk::hud::HudDebugStallsItem::m_name = m_name;
+      dxvk::hud::HudDebugStallsItem::m_us   = m_timeToGetLock;
+
+      auto& s = dxvk::hud::HudDebugStallsItem::m_startTime;
+      uint64_t duration = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - s).count();
+      dxvk::hud::HudDebugStallsItem::m_timestamp_ms = duration;
+    }
   }
 
 

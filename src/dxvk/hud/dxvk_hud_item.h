@@ -496,4 +496,25 @@ namespace dxvk::hud {
 
   };
 
+
+  class HudDebugStallsItem : public HudItem {
+  public:
+
+    HudDebugStallsItem();
+
+    ~HudDebugStallsItem();
+
+    void update(dxvk::high_resolution_clock::time_point time);
+
+    HudPos render(
+            HudRenderer&      renderer,
+            HudPos            position);
+
+    static std::atomic<const char*> m_name;
+    static std::atomic<uint64_t>    m_us;
+    static std::atomic<uint64_t>    m_timestamp_ms;
+    static dxvk::high_resolution_clock::time_point m_startTime;
+
+  };
+
 }

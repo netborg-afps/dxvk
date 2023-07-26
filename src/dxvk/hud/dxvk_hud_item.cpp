@@ -820,4 +820,46 @@ namespace dxvk::hud {
          / (uint32_t(m_tasksTotal - m_offset));
   }
 
+
+  HudDebugStallsItem::HudDebugStallsItem() {}
+  HudDebugStallsItem::~HudDebugStallsItem() {}
+
+
+  void HudDebugStallsItem::update(dxvk::high_resolution_clock::time_point time) {
+    uint64_t timeSinceStart = std::chrono::duration_cast<std::chrono::milliseconds>(time - m_startTime).count();
+
+    if( timeSinceStart - m_timestamp_ms > 1000 ) {
+      m_name = "";
+      m_us   = 0;
+    }
+  }
+
+
+  HudPos HudDebugStallsItem::render(
+          HudRenderer&      renderer,
+          HudPos            position) {
+
+    uint64_t us = std::min( 99999ull, m_us.load() );
+
+    auto str_us = std::to_string(us);
+    if( m_us < 10 ) str_us.insert(0, "    ");
+    else if( m_us < 100 ) str_us.insert(0, "   ");
+    else if( m_us < 1000 ) str_us.insert(0, "  ");
+    else if( m_us < 10000 ) str_us.insert(0, " ");
+
+    std::string string = str::format(str_us, " us : ", m_name);
+
+    position.y += 20.0f;
+
+    renderer.drawText(16.0f,
+      { position.x, position.y },
+      { 1.0f, 1.0f, 0.3f, 1.0f },
+      string);
+
+    position.y += 8.0f;
+
+    return position;
+
+  }
+
 }
