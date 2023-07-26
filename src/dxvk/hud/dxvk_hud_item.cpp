@@ -828,7 +828,7 @@ namespace dxvk::hud {
   void HudDebugStallsItem::update(dxvk::high_resolution_clock::time_point time) {
     uint64_t timeSinceStart = std::chrono::duration_cast<std::chrono::milliseconds>(time - m_startTime).count();
 
-    if( timeSinceStart - m_timestamp_ms > 1000 ) {
+    if( timeSinceStart - m_timestamp_ms > 2000 ) {
       m_name = "";
       m_us   = 0;
     }
