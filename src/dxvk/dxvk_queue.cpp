@@ -1,65 +1,19 @@
 #include "dxvk_device.h"
 #include "dxvk_queue.h"
-#include <boost/lockfree/queue.hpp>
+#include "../util/sync/sync_memorypool.h"
+#include "lockfree/concurrentqueue/concurrentqueue.h"
 
 namespace dxvk {
 
-  class DxvkSubmitEntryPool {
-  public:
-    DxvkSubmitEntryPool( int numEntries );
-    ~DxvkSubmitEntryPool();
-
-    DxvkSubmitEntry* acquire();
-    void release( DxvkSubmitEntry* entry );
-
-  private:
-    DxvkSubmissionQueue::lockfree_queue_t* m_queue;
-    DxvkSubmitEntry* m_entries;
-  };
-
-
-  DxvkSubmitEntryPool::DxvkSubmitEntryPool(int numEntries) {
-    assert( numEntries <= 32 );
-    m_queue = new DxvkSubmissionQueue::lockfree_queue_t();
-
-    m_entries = new DxvkSubmitEntry[numEntries]();
-    for( int i=0; i<numEntries; ++i ) {
-      m_queue->push( &m_entries[i] );
-    }
-  }
-
-
-  DxvkSubmitEntryPool::~DxvkSubmitEntryPool() {
-    delete m_queue;
-    delete m_entries;
-  }
-
-
-  DxvkSubmitEntry* DxvkSubmitEntryPool::acquire() {
-    DxvkSubmitEntry* res;
-
-    // TODO: add atomic sync
-    while( !m_queue->pop(res) ) {}
-
-    *res = {};
-    return res;
-  }
-
-
-  void DxvkSubmitEntryPool::release(DxvkSubmitEntry* entry) {
-    while( !m_queue->push(entry) ) {}
-  }
-
-
-  
   DxvkSubmissionQueue::DxvkSubmissionQueue(DxvkDevice* device, const DxvkQueueCallback& callback)
   : m_device(device), m_callback(callback),
     m_submitThread([this] () { submitCmdLists(); }),
     m_finishThread([this] () { finishCmdLists(); }) {
 
-    m_submitEntryPool = new DxvkSubmitEntryPool( MaxNumQueuedCommandBuffers );
-    m_lfFinishQueue   = new lockfree_queue_t;
-    m_lfSubmitQueue   = new lockfree_queue_t;
+    m_submitEntryPool = new memorypool_t( MaxNumQueuedCommandBuffers );
+    m_lfSubmitQueue   = new mpmc_queue_t( MaxNumQueuedCommandBuffers );
+    m_lfFinishQueue   = new spsc_queue_t( MaxNumQueuedCommandBuffers );
+    m_consumerToken   = new moodycamel::ConsumerToken(*m_lfSubmitQueue);
   }
   
   
@@ -77,6 +31,7 @@ namespace dxvk {
     m_submitThread.join();
     m_finishThread.join();
 
+    delete m_consumerToken;
     delete m_lfFinishQueue;
     delete m_lfSubmitQueue;
     delete m_submitEntryPool;
@@ -85,10 +40,11 @@ namespace dxvk {
   
   void DxvkSubmissionQueue::submit(DxvkSubmitInfo submitInfo, DxvkSubmitStatus* status) {
     DxvkSubmitEntry* pEntry = m_submitEntryPool->acquire();
+    *pEntry = {};
     pEntry->status = status;
     pEntry->submit = std::move(submitInfo);
 
-    m_lfSubmitQueue->push( pEntry );
+    m_lfSubmitQueue->enqueue( pEntry );
     m_submitSyncIsEmpty.clear();
     m_appendSync.signal_one();
   }
@@ -96,10 +52,11 @@ namespace dxvk {
 
   void DxvkSubmissionQueue::present(DxvkPresentInfo presentInfo, DxvkSubmitStatus* status) {
     DxvkSubmitEntry* pEntry= m_submitEntryPool->acquire();
+    *pEntry = {};
     pEntry->status = status;
     pEntry->present = std::move(presentInfo);
 
-    m_lfSubmitQueue->push( pEntry );
+    m_lfSubmitQueue->enqueue( pEntry );
     m_submitSyncIsEmpty.clear();
     m_appendSync.signal_one();
   }
@@ -114,18 +71,18 @@ namespace dxvk {
 
 
   void DxvkSubmissionQueue::synchronize() {
-    while (!m_stopped.load() && !m_lfSubmitQueue->empty()) {
+    while (!m_stopped.load() && m_lfSubmitQueue->size_approx() > 0) {
       m_submitSyncIsEmpty.wait();
     }
   }
 
 
   void DxvkSubmissionQueue::waitForIdle() {
-    while (!m_stopped.load() && !m_lfSubmitQueue->empty()) {
+    while (!m_stopped.load() && m_lfSubmitQueue->size_approx() > 0) {
       m_submitSyncIsEmpty.wait();
     }
 
-    while (!m_stopped.load() && !m_lfFinishQueue->empty()) {
+    while (!m_stopped.load() && m_lfFinishQueue->size_approx() > 0) {
       m_finishSyncIsEmpty.wait();
     }
   }
@@ -152,7 +109,7 @@ namespace dxvk {
 
     while (!m_stopped.load()) {
       DxvkSubmitEntry* pEntry = nullptr;
-      while (!m_stopped.load() && !m_lfSubmitQueue->pop(pEntry)) {
+      while (!m_stopped.load() && !m_lfSubmitQueue->try_dequeue(*m_consumerToken, pEntry)) {
         m_appendSync.wait();
       }
       
@@ -188,7 +145,7 @@ namespace dxvk {
         (entry.present.presenter != nullptr && entry.result != VK_ERROR_DEVICE_LOST);
 
       if (doForward) {
-        m_lfFinishQueue->push( pEntry );
+        m_lfFinishQueue->enqueue( pEntry );
         m_finishSyncIsEmpty.clear();
         m_finishSyncIsFilled.signal_one();
 
@@ -200,7 +157,7 @@ namespace dxvk {
           m_device->waitForIdle();
       }
 
-      if( m_lfSubmitQueue->empty() ) {
+      if (m_lfSubmitQueue->size_approx() == 0) {
         m_submitSyncIsEmpty.signal_all();
       }
 
@@ -215,7 +172,7 @@ namespace dxvk {
     while (!m_stopped.load()) {
 
       DxvkSubmitEntry* pEntry = nullptr;
-      while (!m_stopped.load() && !m_lfFinishQueue->pop(pEntry)) {
+      while (!m_stopped.load() && !m_lfFinishQueue->try_dequeue(pEntry)) {
         auto t0 = dxvk::high_resolution_clock::now();
         m_finishSyncIsFilled.wait();
         auto t1 = dxvk::high_resolution_clock::now();
@@ -254,7 +211,7 @@ namespace dxvk {
       if (entry.submit.cmdList != nullptr)
         entry.submit.cmdList->notifyObjects();
 
-      if( m_lfFinishQueue->empty() ) {
+      if (m_lfFinishQueue->size_approx() == 0) {
           m_finishSyncIsEmpty.signal_one();
       }
 

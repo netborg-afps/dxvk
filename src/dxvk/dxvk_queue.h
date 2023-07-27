@@ -1,8 +1,8 @@
 #pragma once
 
 #include <mutex>
-#include <queue>
-#include <boost/lockfree/lockfree_forward.hpp>
+
+#include "lockfree/readerwriterqueue/readerwriterqueue.h"
 
 #include "../util/sync/sync_atomic_signal.h"
 #include "../util/thread.h"
@@ -10,10 +10,22 @@
 #include "dxvk_cmdlist.h"
 #include "dxvk_presenter.h"
 
+namespace moodycamel {
+  template<typename T, typename Traits>
+  class ConcurrentQueue;
+
+  struct ConsumerToken;
+  struct ConcurrentQueueDefaultTraits;
+}
+
 namespace dxvk {
   
   class DxvkDevice;
   class DxvkSubmitEntryPool;
+
+  namespace sync {
+    template<typename T> class MemoryPool;
+  }
 
   /**
    * \brief Submission status
@@ -149,7 +161,7 @@ namespace dxvk {
      */
     template<typename Pred>
     void synchronizeUntil(const Pred& pred) {
-      while( !m_stopped && !pred() ) {
+      while (!m_stopped && !pred()) {
         m_finishSync.wait();
       }
     }
@@ -177,9 +189,11 @@ namespace dxvk {
      */
     void unlockDeviceQueue();
 
-    typedef boost::lockfree::queue<DxvkSubmitEntry*, boost::lockfree::capacity<32>, boost::lockfree::fixed_sized<true> > lockfree_queue_t;
-
   private:
+
+    typedef moodycamel::ConcurrentQueue<DxvkSubmitEntry*, moodycamel::ConcurrentQueueDefaultTraits> mpmc_queue_t;
+    typedef moodycamel::ReaderWriterQueue<DxvkSubmitEntry*> spsc_queue_t;
+    typedef sync::MemoryPool<DxvkSubmitEntry> memorypool_t;
 
     DxvkDevice*                 m_device;
     DxvkQueueCallback           m_callback;
@@ -199,10 +213,12 @@ namespace dxvk {
     dxvk::sync::AtomicSignal    m_appendSync          = { "append_sync", false };
 
     alignas(64)
-    lockfree_queue_t*           m_lfFinishQueue;
-    lockfree_queue_t*           m_lfSubmitQueue;
+    mpmc_queue_t*               m_lfSubmitQueue;
+    spsc_queue_t*               m_lfFinishQueue;
 
-    DxvkSubmitEntryPool*        m_submitEntryPool;
+    memorypool_t*               m_submitEntryPool;
+
+    moodycamel::ConsumerToken*  m_consumerToken;
 
     dxvk::thread                m_submitThread;
     dxvk::thread                m_finishThread;
