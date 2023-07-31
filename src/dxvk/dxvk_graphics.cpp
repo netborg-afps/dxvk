@@ -950,8 +950,10 @@ namespace dxvk {
   
   
   DxvkGraphicsPipeline::~DxvkGraphicsPipeline() {
-    this->destroyBasePipelines();
-    this->destroyOptimizedPipelines();
+    if (m_device) {
+      this->destroyBasePipelines();
+      this->destroyOptimizedPipelines();
+    }
   }
   
   
@@ -1264,16 +1266,16 @@ namespace dxvk {
         // to prevent multiple threads from compiling identical Vulkan pipelines.
         // This should be rare, but has been buggy on some drivers in the past,
         // so just don't allow it.
-        if( entry->second != VK_NULL_HANDLE )
+        if (entry->second != VK_NULL_HANDLE)
           return entry->second;
 
         else {
-          while( true ) {
+          while (true) {
             m_fastCond.wait(lock);
             auto entry2 = m_fastPipelines.find(key);
-            if( entry2 == m_fastPipelines.end() )
+            if (entry2 == m_fastPipelines.end())
               return VK_NULL_HANDLE;
-            if( entry2->second != VK_NULL_HANDLE )
+            if (entry2->second != VK_NULL_HANDLE)
               return entry2->second;
           }
         }

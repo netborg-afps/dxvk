@@ -471,6 +471,7 @@ namespace dxvk {
             DxvkShaderPipelineLibrary*  vsLibrary,
             DxvkShaderPipelineLibrary*  fsLibrary);
 
+    DxvkGraphicsPipeline() : m_device(nullptr) {}
     ~DxvkGraphicsPipeline();
 
     /**
@@ -562,6 +563,16 @@ namespace dxvk {
      * zero, any Vulkan pipeline objects may be destroyed.
      */
     void releasePipeline();
+
+    /**
+     * \brief Returns whether the pipeline is null
+     *
+     * The default constructor is used to signal this pipeline
+     * is being created for the purpose of mutex contention
+     * optimization. It only is null while creating the pipeline
+     * and will be setup regularly after creation is finished.
+     */
+    bool isNullHandle() { return m_device == nullptr; }
 
   private:
 
