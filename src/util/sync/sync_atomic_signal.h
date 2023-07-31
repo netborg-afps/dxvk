@@ -127,7 +127,7 @@ namespace dxvk::sync {
 
     void wait() {
 
-      while( true ) {
+      while (true) {
 
         long s;
         uint32_t one = 1;
