@@ -597,6 +597,7 @@ namespace dxvk {
 
     alignas(CACHE_LINE_SIZE)
     dxvk::mutex                                   m_fastMutex;
+    dxvk::condition_variable                      m_fastCond;
     std::unordered_map<
       DxvkGraphicsPipelineFastInstanceKey,
       VkPipeline, DxvkHash, DxvkEq>               m_fastPipelines;
