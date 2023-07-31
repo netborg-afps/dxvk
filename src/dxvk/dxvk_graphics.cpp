@@ -1255,20 +1255,44 @@ namespace dxvk {
     DxvkGraphicsPipelineFastInstanceKey key(m_device,
       m_shaders, state, m_flags, m_specConstantMask);
 
-    std::lock_guard lock(m_fastMutex);
+    { std::unique_lock lock(m_fastMutex);
 
-    auto entry = m_fastPipelines.find(key);
-    if (entry != m_fastPipelines.end())
-      return entry->second;
+      auto entry = m_fastPipelines.find(key);
+      if (entry != m_fastPipelines.end()) {
 
-    // Keep pipeline locked to prevent multiple threads from compiling
-    // identical Vulkan pipelines. This should be rare, but has been
-    // buggy on some drivers in the past, so just don't allow it.
+        // VK_NULL_HANDLE is used here to mark it as being processed
+        // to prevent multiple threads from compiling identical Vulkan pipelines.
+        // This should be rare, but has been buggy on some drivers in the past,
+        // so just don't allow it.
+        if( entry->second != VK_NULL_HANDLE )
+          return entry->second;
+
+        else {
+          while( true ) {
+            m_fastCond.wait(lock);
+            auto entry2 = m_fastPipelines.find(key);
+            if( entry2 == m_fastPipelines.end() )
+              return VK_NULL_HANDLE;
+            if( entry2->second != VK_NULL_HANDLE )
+              return entry2->second;
+          }
+        }
+      }
+
+      m_fastPipelines.insert({ key, VK_NULL_HANDLE });
+    }
+
     VkPipeline handle = createOptimizedPipeline(key);
 
-    if (handle)
-      m_fastPipelines.insert({ key, handle });
+    { std::lock_guard lock(m_fastMutex);
+      if (handle) {
+        m_fastPipelines[key] = handle;
+      }
+      else
+        m_fastPipelines.erase(key);
+    }
 
+    m_fastCond.notify_all();
     return handle;
   }
 
