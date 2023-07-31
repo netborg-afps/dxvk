@@ -220,80 +220,109 @@ namespace dxvk {
     const DxvkGraphicsPipelineShaders& shaders) {
     if (shaders.vs == nullptr)
       return nullptr;
-    
-    std::lock_guard<dxvk::mutex> lock(m_mutex);
-    
-    auto pair = m_graphicsPipelines.find(shaders);
-    if (pair != m_graphicsPipelines.end())
-      return &pair->second;
 
-    DxvkBindingLayout mergedLayout(VK_SHADER_STAGE_ALL_GRAPHICS);
-    mergedLayout.merge(shaders.vs->getBindings());
+    { std::unique_lock<dxvk::mutex> lock(m_mutexGraphicsPipeline);
+      auto pair = m_graphicsPipelines.find(shaders);
+      if (pair != m_graphicsPipelines.end()) {
 
-    if (shaders.tcs != nullptr)
-      mergedLayout.merge(shaders.tcs->getBindings());
+        // isNullHandle() is used here to mark it as being processed by another thread
+        if (!pair->second.isNullHandle())
+          return &pair->second;
 
-    if (shaders.tes != nullptr)
-      mergedLayout.merge(shaders.tes->getBindings());
-
-    if (shaders.gs != nullptr)
-      mergedLayout.merge(shaders.gs->getBindings());
-
-    if (shaders.fs != nullptr)
-      mergedLayout.merge(shaders.fs->getBindings());
-
-    auto layout = createPipelineLayout(mergedLayout);
-
-    DxvkShaderPipelineLibrary* vsLibrary = nullptr;
-    DxvkShaderPipelineLibrary* fsLibrary = nullptr;
-
-    if (m_device->canUseGraphicsPipelineLibrary()) {
-      DxvkShaderPipelineLibraryKey vsKey;
-      vsKey.addShader(shaders.vs);
-
-      if (shaders.tcs != nullptr) vsKey.addShader(shaders.tcs);
-      if (shaders.tes != nullptr) vsKey.addShader(shaders.tes);
-      if (shaders.gs  != nullptr) vsKey.addShader(shaders.gs);
-
-      if (vsKey.canUsePipelineLibrary()) {
-        vsLibrary = findPipelineLibraryLocked(vsKey);
-
-        if (!vsLibrary) {
-          // If multiple shader stages are participating, create a
-          // pipeline library so that it can potentially be reused.
-          // Don't dispatch the pipeline library to a worker thread
-          // since it should be compiled on demand anyway.
-          vsLibrary = createPipelineLibraryLocked(vsKey);
-
-          // Register the pipeline library with the state cache
-          // so that subsequent runs can still compile it early
-          DxvkStateCacheKey shaderKeys;
-          shaderKeys.vs = shaders.vs->getShaderKey();
-
-          if (shaders.tcs != nullptr) shaderKeys.tcs = shaders.tcs->getShaderKey();
-          if (shaders.tes != nullptr) shaderKeys.tes = shaders.tes->getShaderKey();
-          if (shaders.gs  != nullptr) shaderKeys.gs  = shaders.gs->getShaderKey();
-
-          m_stateCache.addPipelineLibrary(shaderKeys);
+        else {
+          while (true) {
+            m_condGraphicsPipeline.wait(lock);
+            auto pair2 = m_graphicsPipelines.find(shaders);
+            if (!pair2->second.isNullHandle())
+              return &pair2->second;
+          }
         }
       }
 
-      if (vsLibrary) {
-        DxvkShaderPipelineLibraryKey fsKey;
+      m_graphicsPipelines.emplace(
+          std::piecewise_construct,
+          std::tuple(shaders),
+          std::tuple());
+    }
 
-        if (shaders.fs != nullptr)
-          fsKey.addShader(shaders.fs);
+    DxvkShaderPipelineLibrary* vsLibrary = nullptr;
+    DxvkShaderPipelineLibrary* fsLibrary = nullptr;
+    DxvkBindingLayoutObjects*  layout;
 
-        fsLibrary = findPipelineLibraryLocked(fsKey);
+    { std::lock_guard<dxvk::mutex> lock(m_mutex);
+
+      DxvkBindingLayout mergedLayout(VK_SHADER_STAGE_ALL_GRAPHICS);
+      mergedLayout.merge(shaders.vs->getBindings());
+
+      if (shaders.tcs != nullptr)
+        mergedLayout.merge(shaders.tcs->getBindings());
+
+      if (shaders.tes != nullptr)
+        mergedLayout.merge(shaders.tes->getBindings());
+
+      if (shaders.gs != nullptr)
+        mergedLayout.merge(shaders.gs->getBindings());
+
+      if (shaders.fs != nullptr)
+        mergedLayout.merge(shaders.fs->getBindings());
+
+      layout = createPipelineLayout(mergedLayout);
+
+      if (m_device->canUseGraphicsPipelineLibrary()) {
+        DxvkShaderPipelineLibraryKey vsKey;
+        vsKey.addShader(shaders.vs);
+
+        if (shaders.tcs != nullptr) vsKey.addShader(shaders.tcs);
+        if (shaders.tes != nullptr) vsKey.addShader(shaders.tes);
+        if (shaders.gs  != nullptr) vsKey.addShader(shaders.gs);
+
+        if (vsKey.canUsePipelineLibrary()) {
+          vsLibrary = findPipelineLibraryLocked(vsKey);
+
+          if (!vsLibrary) {
+            // If multiple shader stages are participating, create a
+            // pipeline library so that it can potentially be reused.
+            // Don't dispatch the pipeline library to a worker thread
+            // since it should be compiled on demand anyway.
+            vsLibrary = createPipelineLibraryLocked(vsKey);
+
+            // Register the pipeline library with the state cache
+            // so that subsequent runs can still compile it early
+            DxvkStateCacheKey shaderKeys;
+            shaderKeys.vs = shaders.vs->getShaderKey();
+
+            if (shaders.tcs != nullptr) shaderKeys.tcs = shaders.tcs->getShaderKey();
+            if (shaders.tes != nullptr) shaderKeys.tes = shaders.tes->getShaderKey();
+            if (shaders.gs  != nullptr) shaderKeys.gs  = shaders.gs->getShaderKey();
+
+            m_stateCache.addPipelineLibrary(shaderKeys);
+          }
+        }
+
+        if (vsLibrary) {
+          DxvkShaderPipelineLibraryKey fsKey;
+
+          if (shaders.fs != nullptr)
+            fsKey.addShader(shaders.fs);
+
+          fsLibrary = findPipelineLibraryLocked(fsKey);
+        }
       }
     }
 
-    auto iter = m_graphicsPipelines.emplace(
-      std::piecewise_construct,
-      std::tuple(shaders),
-      std::tuple(m_device, this, shaders,
-        layout, vsLibrary, fsLibrary));
-    return &iter.first->second;
+    { std::lock_guard<dxvk::mutex> lock(m_mutexGraphicsPipeline);
+      auto iter = m_graphicsPipelines.find(shaders);
+      if (unlikely(iter == m_graphicsPipelines.end())) {
+        Logger::err("m_graphicsPipelines.find(shaders) did fail");
+        return nullptr;
+      }
+
+      new (&iter->second) DxvkGraphicsPipeline(m_device, this, shaders,
+          layout, vsLibrary, fsLibrary);
+
+      m_condGraphicsPipeline.notify_all();
+      return &iter->second;
+    }
   }
 
   

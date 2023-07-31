@@ -271,7 +271,9 @@ namespace dxvk {
     DxvkStateCache            m_stateCache;
     DxvkPipelineStats         m_stats;
     
-    dxvk::mutex m_mutex;
+    dxvk::mutex               m_mutex;
+    dxvk::mutex               m_mutexGraphicsPipeline;
+    dxvk::condition_variable  m_condGraphicsPipeline;
     
     std::unordered_map<
       DxvkBindingSetLayoutKey,
