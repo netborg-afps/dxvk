@@ -2,12 +2,14 @@
 #pragma once
 
 #include <mutex>
-#include <queue>
 #include <unordered_map>
 
 #include "dxvk_compute.h"
 #include "dxvk_graphics.h"
 #include "dxvk_state_cache.h"
+
+#include "lockfree/concurrentqueue/concurrentqueue_forward.h"
+#include "../util/sync/sync_atomic_signal.h"
 
 namespace dxvk {
 
@@ -120,15 +122,28 @@ namespace dxvk {
       PipelineEntry(DxvkGraphicsPipeline* p, const DxvkGraphicsPipelineStateInfo& s)
       : pipelineLibrary(nullptr), graphicsPipeline(p), graphicsState(s) { }
 
+      PipelineEntry& operator = (PipelineEntry&&) = default;
+
       DxvkShaderPipelineLibrary*    pipelineLibrary;
       DxvkGraphicsPipeline*         graphicsPipeline;
       DxvkGraphicsPipelineStateInfo graphicsState;
     };
 
+    typedef moodycamel::ConcurrentQueue<PipelineEntry, moodycamel::ConcurrentQueueDefaultTraits> mpmc_queue_t;
+    typedef moodycamel::ConsumerToken consumer_token_t;
+
+    enum class ThreadState : uint32_t {
+      Idle,
+      WaitingForScheduler,
+      Working
+    };
+
     struct PipelineBucket {
-      dxvk::condition_variable  cond;
-      std::queue<PipelineEntry> queue;
-      uint32_t                  idleWorkers = 0;
+      mpmc_queue_t*                           lfQueue;
+      std::vector<
+        std::array<consumer_token_t,3> >      consumerTokens;
+      std::vector<sync::AtomicSignal*>        threadSignals;
+      std::vector<std::atomic<ThreadState>*>  threadState;
     };
 
     DxvkDevice*                       m_device;
@@ -136,17 +151,16 @@ namespace dxvk {
     std::atomic<uint64_t>             m_tasksTotal     = { 0ull };
     std::atomic<uint64_t>             m_tasksCompleted = { 0ull };
 
-    dxvk::mutex                       m_lock;
     std::array<PipelineBucket, 3>     m_buckets;
 
-    bool                              m_workersRunning = false;
+    std::atomic<bool>                 m_workersRunning = { false };
     std::vector<dxvk::thread>         m_workers;
 
     void notifyWorkers(DxvkPipelinePriority priority);
 
     void startWorkers();
 
-    void runWorker(DxvkPipelinePriority maxPriority);
+    void runWorker(DxvkPipelinePriority maxPriority, uint32_t id);
 
   };
 
