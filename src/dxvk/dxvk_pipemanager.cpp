@@ -4,29 +4,42 @@
 #include "dxvk_pipemanager.h"
 #include "dxvk_state_cache.h"
 
+#include "lockfree/concurrentqueue/concurrentqueue.h"
+
 namespace dxvk {
   
   DxvkPipelineWorkers::DxvkPipelineWorkers(
           DxvkDevice*                     device)
   : m_device(device) {
-
+    for (size_t i=0; i<m_buckets.size(); ++i) {
+      m_buckets[i].lfQueue = new mpmc_queue_t(64);
+    }
   }
 
 
   DxvkPipelineWorkers::~DxvkPipelineWorkers() {
     this->stopWorkers();
+
+    for (size_t i=0; i<m_buckets.size(); ++i) {
+      delete m_buckets[i].lfQueue;
+      for (sync::AtomicSignal* signal: m_buckets[i].threadSignals)
+        delete signal;
+      for (std::atomic<ThreadState>* threadState: m_buckets[i].threadState)
+        delete threadState;
+    }
   }
 
 
   void DxvkPipelineWorkers::compilePipelineLibrary(
           DxvkShaderPipelineLibrary*      library,
           DxvkPipelinePriority            priority) {
-    std::unique_lock lock(m_lock);
     this->startWorkers();
 
     m_tasksTotal += 1;
 
-    m_buckets[uint32_t(priority)].queue.emplace(library);
+    PipelineBucket& bucket = m_buckets[uint32_t(priority)];
+    while (!bucket.lfQueue->enqueue_emplace(library)) {}
+
     notifyWorkers(priority);
   }
 
@@ -35,29 +48,29 @@ namespace dxvk {
           DxvkGraphicsPipeline*           pipeline,
     const DxvkGraphicsPipelineStateInfo&  state,
           DxvkPipelinePriority            priority) {
-    std::unique_lock lock(m_lock);
     this->startWorkers();
 
     pipeline->acquirePipeline();
     m_tasksTotal += 1;
 
-    m_buckets[uint32_t(priority)].queue.emplace(pipeline, state);
+    PipelineBucket& bucket = m_buckets[uint32_t(priority)];
+    while (!bucket.lfQueue->enqueue_emplace(pipeline, state)) {}
+
     notifyWorkers(priority);
   }
 
 
   void DxvkPipelineWorkers::stopWorkers() {
-    { std::unique_lock lock(m_lock);
+    if (!m_workersRunning)
+      return;
 
-      if (!m_workersRunning)
-        return;
+    m_workersRunning = false;
 
-      m_workersRunning = false;
-
-      for (uint32_t i = 0; i < m_buckets.size(); i++)
-        m_buckets[i].cond.notify_all();
+    for (auto& bucket : m_buckets) {
+      for (auto* signal : bucket.threadSignals ) {
+        signal->signal_one();
+      }
     }
-
     for (auto& worker : m_workers)
       worker.join();
 
@@ -69,19 +82,27 @@ namespace dxvk {
     uint32_t index = uint32_t(priority);
 
     // If any workers are idle in a suitable set, notify the corresponding
-    // condition variable. If all workers are busy anyway, we know that the
-    // job is going to be picked up at some point anyway.
+    // worker. If all workers are busy, we know that the job is going to
+    // be picked up at some point anyway.
     for (uint32_t i = index; i < m_buckets.size(); i++) {
-      if (m_buckets[i].idleWorkers) {
-        m_buckets[i].cond.notify_one();
-        break;
+      auto& bucket = m_buckets[(uint32_t)i];
+
+      for (uint32_t j = 0; j < bucket.threadState.size(); j++) {
+        ThreadState idle = ThreadState::Idle;
+        if (bucket.threadState[j]->compare_exchange_strong(idle, ThreadState::WaitingForScheduler)) {
+          bucket.threadSignals[j]->signal_one();
+          return;
+        }
       }
     }
   }
 
 
   void DxvkPipelineWorkers::startWorkers() {
-    if (!std::exchange(m_workersRunning, true)) {
+    if (!m_workersRunning.exchange(true)) {
+
+      std::vector< std::pair<uint32_t, uint32_t> > workerIds;
+
       // Use all available cores by default
       uint32_t workerCount = dxvk::thread::hardware_concurrency();
 
@@ -112,10 +133,31 @@ namespace dxvk {
             priority = DxvkPipelinePriority::Low;
         }
 
-        auto& worker = m_workers.emplace_back([this, priority] {
-          runWorker(priority);
+        auto& bucket = m_buckets[(uint32_t)priority];
+
+        // since the workers are free to pull from "any queue"
+        // we set them up having consumer tokens for each queue
+        bucket.consumerTokens.push_back(
+          std::array<consumer_token_t,3>{
+            moodycamel::ConsumerToken(*m_buckets[0].lfQueue),
+            moodycamel::ConsumerToken(*m_buckets[1].lfQueue),
+            moodycamel::ConsumerToken(*m_buckets[2].lfQueue)
+          });
+
+        uint32_t bucketId = bucket.threadState.size();
+
+        bucket.threadSignals.push_back(new sync::AtomicSignal("pipeline_worker", false));
+        bucket.threadState.push_back(new std::atomic<ThreadState> (ThreadState::Idle));
+
+        workerIds.push_back( std::make_pair((uint32_t)priority, bucketId) );
+      }
+
+      // ready to start the worker threads
+      for (auto& pair : workerIds) {
+        auto& worker = m_workers.emplace_back([this, priority = pair.first, bucketId = pair.second] {
+          runWorker((DxvkPipelinePriority)priority, bucketId);
         });
-        
+
         worker.set_priority(ThreadPriority::Lowest);
       }
 
@@ -124,40 +166,40 @@ namespace dxvk {
   }
 
 
-  void DxvkPipelineWorkers::runWorker(DxvkPipelinePriority maxPriority) {
+  void DxvkPipelineWorkers::runWorker(DxvkPipelinePriority maxPriority, uint32_t id) {
     static const std::array<char, 3> suffixes = { 'h', 'n', 'l' };
 
     const uint32_t maxPriorityIndex = uint32_t(maxPriority);
+
     env::setThreadName(str::format("dxvk-shader-", suffixes.at(maxPriorityIndex)));
 
     while (true) {
+
+      auto& bucket = m_buckets[maxPriorityIndex];
       PipelineEntry entry;
 
-      { std::unique_lock lock(m_lock);
-        auto& bucket = m_buckets[maxPriorityIndex];
-
-        bucket.idleWorkers += 1;
-        bucket.cond.wait(lock, [this, maxPriorityIndex, &entry] {
-          // Attempt to fetch a work item from the
-          // highest-priority queue that is not empty
-          for (uint32_t i = 0; i <= maxPriorityIndex; i++) {
-            if (!m_buckets[i].queue.empty()) {
-              entry = m_buckets[i].queue.front();
-              m_buckets[i].queue.pop();
-              return true;
-            }
+      while (m_workersRunning) {
+        // Attempt to fetch a work item from the
+        // highest-priority queue that is not empty
+        for (uint32_t i = 0; i <= maxPriorityIndex; i++) {
+          auto& popBucket = m_buckets[i];
+          auto& token = bucket.consumerTokens[id][i];
+          if (popBucket.lfQueue->try_dequeue(token, entry)) {
+            goto break_loop;
           }
+        }
 
-          return !m_workersRunning;
-        });
-
-        bucket.idleWorkers -= 1;
-
-        // Skip pending work, exiting early is
-        // more important in this case.
-        if (!m_workersRunning)
-          break;
+        bucket.threadState[id]->store( ThreadState::Idle );
+        bucket.threadSignals[id]->wait();
+        bucket.threadState[id]->store( ThreadState::Working );
       }
+
+      break_loop:
+
+      // Skip pending work, exiting early is
+      // more important in this case.
+      if (!m_workersRunning)
+        break;
 
       if (entry.pipelineLibrary) {
         entry.pipelineLibrary->compilePipeline();

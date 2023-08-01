@@ -2,6 +2,7 @@
 
 #include <mutex>
 
+#include "lockfree/concurrentqueue/concurrentqueue_forward.h"
 #include "lockfree/readerwriterqueue/readerwriterqueue.h"
 
 #include "../util/sync/sync_atomic_signal.h"
@@ -9,14 +10,6 @@
 
 #include "dxvk_cmdlist.h"
 #include "dxvk_presenter.h"
-
-namespace moodycamel {
-  template<typename T, typename Traits>
-  class ConcurrentQueue;
-
-  struct ConsumerToken;
-  struct ConcurrentQueueDefaultTraits;
-}
 
 namespace dxvk {
   
