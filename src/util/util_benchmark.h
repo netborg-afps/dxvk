@@ -34,10 +34,11 @@ public:
   void endSample( const time_point_t& t0 ) {
 
     auto t1 = dxvk::high_resolution_clock::now();
-    uint64_t us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-    if( us < 10 ) m_data[us]++;                     // 0-9
-    else if( us < 100 ) m_data[9 + us/10]++;        // 10-18
-    else if( us < 1000 ) m_data[19 + us/100]++;     // 19-27
+    uint64_t us = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    if( us < 1000 ) m_data[us/100]++;                       // 0-9
+    else if( us < 10000 ) m_data[9 + us/1000]++;            // 10-18
+    else if( us < 100000 ) m_data[18 + us/10000]++;         // 19-27
+    else if( us < 1000000 ) m_data[27 + us/100000]++;       // 28-36
     else {
       SingleEvent event = { .timeDuration = us, .timestamp = getTimestamp() };
       m_singleEvents.push_back(event);
@@ -76,7 +77,7 @@ private:
 
   void printResults() {
 
-    if( getSampleCount() == 0 )
+    if( getSampleCount() < 10 )
       return;
 
     std::ofstream file = std::ofstream( m_name, std::ios::app );
@@ -86,17 +87,22 @@ private:
     file << std::endl;
 
     for( size_t i=0; i<10; ++i )
-      file << "   " << i << " us: #" << m_data[i] << std::endl;
+      file << "   " << i*100 << " ns: #" << m_data[i] << std::endl;
 
     file << std::endl;
 
     for( size_t i=1; i<10; ++i )
-      file << "  " << i*10 << " us: #" << m_data[9+i] << std::endl;
+      file << "   " << i << " us: #" << m_data[9+i] << std::endl;
 
     file << std::endl;
 
     for( size_t i=1; i<10; ++i )
-      file << " " << i*100 << " us: #" << m_data[18+i] << std::endl;
+      file << "  " << i*10 << " us: #" << m_data[18+i] << std::endl;
+
+    file << std::endl;
+
+    for( size_t i=1; i<10; ++i )
+      file << " " << i*100 << " us: #" << m_data[27+i] << std::endl;
 
     if( !m_singleEvents.empty() ) {
 
@@ -119,7 +125,7 @@ private:
   const char*  m_name;
   time_point_t m_startTimestamp;
 
-  std::array< std::atomic<uint64_t>, 28 > m_data;
+  std::array< std::atomic<uint64_t>, 37 > m_data;
   std::vector< SingleEvent > m_singleEvents;
 
 };

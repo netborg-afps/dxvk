@@ -63,36 +63,68 @@ namespace dxvk {
   
   
   DxvkCsChunkPool::~DxvkCsChunkPool() {
-    for (DxvkCsChunk* chunk : m_chunks)
-      delete chunk;
-  }
-  
-  
-  DxvkCsChunk* DxvkCsChunkPool::allocChunk(DxvkCsChunkFlags flags) {
-    DxvkCsChunk* chunk = nullptr;
-
-    { std::lock_guard<dxvk::mutex> lock(m_mutex);
-      
-      if (m_chunks.size() != 0) {
-        chunk = m_chunks.back();
-        m_chunks.pop_back();
+    for (uint16_t i = 0; i < m_chunkObjects.getSize(); ++i) {
+      for (auto* chunk : m_chunkObjects.getDataUnsafe(i)) {
+        delete chunk;
       }
     }
-    
-    if (!chunk)
-      chunk = new DxvkCsChunk();
-    
-    chunk->init(flags);
-    return chunk;
+//    for (DxvkCsChunk* chunk : m_chunks)
+//      delete chunk;
   }
-  
-  
+
+  DxvkCsChunk* DxvkCsChunkPool::allocChunk(DxvkCsChunkFlags flags) {
+    chunk_objects_t::Object& lockedObject = m_chunkObjects.getObjectLocked();
+    std::vector<DxvkCsChunk*>& chunks = lockedObject.data;
+    DxvkCsChunk* chunk = nullptr;
+
+    { std::lock_guard<sync::Spinlock> lock(lockedObject.spinMutex, std::adopt_lock);
+
+      if (likely(!chunks.empty())) {
+        chunk = chunks.back();
+        chunks.pop_back();
+        chunk->init(flags);
+        return chunk;
+      }
+
+      chunk = new DxvkCsChunk();
+      chunk->init(flags);
+      return chunk;
+    }
+  }
+
   void DxvkCsChunkPool::freeChunk(DxvkCsChunk* chunk) {
     chunk->reset();
-    
-    std::lock_guard<dxvk::mutex> lock(m_mutex);
-    m_chunks.push_back(chunk);
+
+    chunk_objects_t::Object& lockedObject = m_chunkObjects.getObjectLocked();
+    lockedObject.data.push_back(chunk);
+    lockedObject.spinMutex.unlock();
   }
+  
+//  DxvkCsChunk* DxvkCsChunkPool::allocChunk(DxvkCsChunkFlags flags) {
+//    DxvkCsChunk* chunk = nullptr;
+//
+//    { std::lock_guard<dxvk::mutex> lock(m_mutex);
+//
+//      if (m_chunks.size() != 0) {
+//        chunk = m_chunks.back();
+//        m_chunks.pop_back();
+//      }
+//    }
+//
+//    if (!chunk)
+//      chunk = new DxvkCsChunk();
+//
+//    chunk->init(flags);
+//    return chunk;
+//  }
+//
+//
+//  void DxvkCsChunkPool::freeChunk(DxvkCsChunk* chunk) {
+//    chunk->reset();
+//
+//    std::lock_guard<dxvk::mutex> lock(m_mutex);
+//    m_chunks.push_back(chunk);
+//  }
   
   
   DxvkCsThread::DxvkCsThread(

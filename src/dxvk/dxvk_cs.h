@@ -6,6 +6,7 @@
 #include <queue>
 
 #include "../util/thread.h"
+#include "../util/sync/sync_objectpool.h"
 #include "../util/util_benchmark.h"
 
 #include "dxvk_device.h"
@@ -288,9 +289,13 @@ namespace dxvk {
     void freeChunk(DxvkCsChunk* chunk);
     
   private:
+
+    typedef sync::ObjectPool<std::vector<DxvkCsChunk*>, 3> chunk_objects_t;
+
+    chunk_objects_t m_chunkObjects;
     
-    dxvk::mutex               m_mutex;
-    std::vector<DxvkCsChunk*> m_chunks;
+//    dxvk::mutex               m_mutex;
+//    std::vector<DxvkCsChunk*> m_chunks;
     
   };
   
