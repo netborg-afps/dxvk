@@ -26,6 +26,10 @@
 #include "d3d11_state.h"
 #include "d3d11_util.h"
 
+#include "../util/util_benchmark.h"
+
+static Benchmark benchmark_alloc_chunk("DxvkCsChunkPool::allocChunk");
+
 namespace dxvk {
   class DxgiAdapter;
   
@@ -410,7 +414,9 @@ namespace dxvk {
             DXGI_VK_FORMAT_MODE   Mode) const;
     
     DxvkCsChunkRef AllocCsChunk(DxvkCsChunkFlags flags) {
+      auto t = benchmark_alloc_chunk.startSample();
       DxvkCsChunk* chunk = m_csChunkPool.allocChunk(flags);
+      benchmark_alloc_chunk.endSample(t);
       return DxvkCsChunkRef(chunk, &m_csChunkPool);
     }
     

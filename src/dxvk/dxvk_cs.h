@@ -6,9 +6,12 @@
 #include <queue>
 
 #include "../util/thread.h"
+#include "../util/util_benchmark.h"
 
 #include "dxvk_device.h"
 #include "dxvk_context.h"
+
+static Benchmark benchmark_free_chunk("DxvkCsChunkPool::freeChunk");
 
 namespace dxvk {
   
@@ -365,8 +368,11 @@ namespace dxvk {
     }
     
     void decRef() const {
-      if (m_chunk != nullptr && m_chunk->decRef() == 0)
+      if (m_chunk != nullptr && m_chunk->decRef() == 0) {
+        auto t = benchmark_free_chunk.startSample();
         m_pool->freeChunk(m_chunk);
+        benchmark_free_chunk.endSample(t);
+      }
     }
     
   };
