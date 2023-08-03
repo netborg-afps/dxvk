@@ -96,6 +96,12 @@ namespace dxvk {
     VkDeviceSize  length;
     void*         mapPtr;
 
+    DxvkBufferSliceHandle() = default;
+    DxvkBufferSliceHandle( VkBuffer _handle, VkDeviceSize _offset,
+      VkDeviceSize _length, void* _mapPtr )
+      : handle(_handle), offset(_offset)
+      , length(_length), mapPtr(_mapPtr) {}
+
     bool eq(const DxvkBufferSliceHandle& other) const {
       return handle == other.handle
           && offset == other.offset
@@ -269,11 +275,11 @@ namespace dxvk {
      * \returns The new buffer slice
      */
     DxvkBufferSliceHandle allocSlice() {
-      std::unique_lock<sync::Spinlock> freeLock(m_freeMutex);
+      std::lock_guard<sync::Spinlock> freeLock(m_freeMutex);
       
       // If no slices are available, swap the two free lists.
       if (unlikely(m_freeSlices.empty())) {
-        std::unique_lock<sync::Spinlock> swapLock(m_swapMutex);
+        std::lock_guard<sync::Spinlock> swapLock(m_swapMutex);
         std::swap(m_freeSlices, m_nextSlices);
       }
 
@@ -282,15 +288,22 @@ namespace dxvk {
       if (unlikely(m_freeSlices.empty())) {
         if (likely(!m_lazyAlloc)) {
           DxvkBufferHandle handle = allocBuffer(m_physSliceCount, true);
+          VkDeviceSize endOffset = m_physSliceCount * m_physSliceStride;
 
-          for (uint32_t i = 0; i < m_physSliceCount; i++)
-            pushSlice(handle, i);
+          for (VkDeviceSize offset = 0; offset < endOffset; ) {
+            pushSlice(handle, offset);
+            offset += m_physSliceStride;
+          }
 
           m_buffers.push_back(std::move(handle));
           m_physSliceCount = std::min(m_physSliceCount * 2, m_physSliceMaxCount);
         } else {
-          for (uint32_t i = 1; i < m_physSliceCount; i++)
-            pushSlice(m_buffer, i);
+          VkDeviceSize endOffset = m_physSliceCount * m_physSliceStride;
+
+          for (VkDeviceSize offset = m_physSliceStride; offset < endOffset; ) {
+            pushSlice(m_buffer, offset);
+            offset += m_physSliceStride;
+          }
 
           m_lazyAlloc = false;
         }
@@ -312,7 +325,7 @@ namespace dxvk {
      */
     void freeSlice(const DxvkBufferSliceHandle& slice) {
       // Add slice to a separate free list to reduce lock contention.
-      std::unique_lock<sync::Spinlock> swapLock(m_swapMutex);
+      std::lock_guard<sync::Spinlock> swapLock(m_swapMutex);
       m_nextSlices.push_back(slice);
     }
 
@@ -353,13 +366,9 @@ namespace dxvk {
     sync::Spinlock                      m_swapMutex;
     std::vector<DxvkBufferSliceHandle>  m_nextSlices;
 
-    void pushSlice(const DxvkBufferHandle& handle, uint32_t index) {
-      DxvkBufferSliceHandle slice;
-      slice.handle = handle.buffer;
-      slice.length = m_physSliceLength;
-      slice.offset = m_physSliceStride * index;
-      slice.mapPtr = handle.memory.mapPtr(slice.offset);
-      m_freeSlices.push_back(slice);
+    void pushSlice(const DxvkBufferHandle& handle, VkDeviceSize offset) {
+      m_freeSlices.emplace_back(handle.buffer, offset,
+        m_physSliceLength, handle.memory.mapPtr(offset));
     }
 
     DxvkBufferHandle allocBuffer(
