@@ -4,11 +4,16 @@
 
 #include <algorithm>
 
-Benchmark benchmark_alloc("DxvkBuffer::allocSlice_master");
-Benchmark benchmark_free("DxvkBuffer::freeSlice_master");
+Benchmark benchmark_alloc("DxvkBuffer::allocSlice_optimize");
+Benchmark benchmark_free("DxvkBuffer::freeSlice_optimize");
 
 
 namespace dxvk {
+
+  sync::Allocator sync::g_alloc( sizeof(
+    dxvk::sync::BitsetStorageNode<
+      dxvk::DxvkBufferSliceHandle, platform_bits> ));
+
   
   DxvkBuffer::DxvkBuffer(
           DxvkDevice*           device,
@@ -223,6 +228,43 @@ namespace dxvk {
     }
 
     return result;
+  }
+
+
+  DxvkBufferSliceHandle DxvkBuffer::allocSlices() {
+    std::lock_guard<dxvk::mutex> freeLock(m_freeMutex);
+
+    // check again if there aren't any slices available
+    // solves the situation when multiple threads arriving here at once
+
+    DxvkBufferSliceHandle result;
+    if( m_bitsetStorage.tryPop(result) ) {
+      return result;
+    }
+
+    if (likely(!m_lazyAlloc)) {
+      DxvkBufferHandle handle = allocBuffer(m_physSliceCount, true);
+
+      VkDeviceSize endOffset = m_physSliceCount * m_physSliceStride;
+      for (VkDeviceSize offset = m_physSliceStride; offset < endOffset; ) {
+        pushSlice(handle, offset);
+        offset += m_physSliceStride;
+      }
+
+      DxvkBufferSliceHandle slice = getSlice(handle, 0);
+
+      m_buffers.push_back(std::move(handle));
+      m_physSliceCount = std::min(m_physSliceCount * 2, m_physSliceMaxCount);
+      return slice;
+    } else {
+      VkDeviceSize endOffset = m_physSliceCount * m_physSliceStride;
+      for (VkDeviceSize offset = m_physSliceStride*2; offset < endOffset; ) {
+        pushSlice(m_buffer, offset);
+        offset += m_physSliceStride;
+      }
+      m_lazyAlloc = false;
+      return getSlice(m_buffer, m_physSliceStride);
+    }
   }
 
 
