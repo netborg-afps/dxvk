@@ -10,6 +10,11 @@
 #include "dxvk_resource.h"
 #include "dxvk_sparse.h"
 
+#include "../util/util_benchmark.h"
+
+extern Benchmark benchmark_alloc;
+extern Benchmark benchmark_free;
+
 namespace dxvk {
 
   /**
@@ -269,6 +274,8 @@ namespace dxvk {
      * \returns The new buffer slice
      */
     DxvkBufferSliceHandle allocSlice() {
+      BENCH_SCOPE(benchmark_alloc);
+      {
       std::unique_lock<sync::Spinlock> freeLock(m_freeMutex);
       
       // If no slices are available, swap the two free lists.
@@ -300,6 +307,7 @@ namespace dxvk {
       DxvkBufferSliceHandle result = m_freeSlices.back();
       m_freeSlices.pop_back();
       return result;
+      }
     }
     
     /**
@@ -311,9 +319,12 @@ namespace dxvk {
      * \param [in] slice The buffer slice to free
      */
     void freeSlice(const DxvkBufferSliceHandle& slice) {
+      BENCH_SCOPE(benchmark_free);
+      {
       // Add slice to a separate free list to reduce lock contention.
       std::unique_lock<sync::Spinlock> swapLock(m_swapMutex);
       m_nextSlices.push_back(slice);
+      }
     }
 
     /**

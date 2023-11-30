@@ -4,6 +4,10 @@
 
 #include <algorithm>
 
+Benchmark benchmark_alloc("DxvkBuffer::allocSlice_master");
+Benchmark benchmark_free("DxvkBuffer::freeSlice_master");
+
+
 namespace dxvk {
   
   DxvkBuffer::DxvkBuffer(
