@@ -4,10 +4,6 @@
 
 #include <algorithm>
 
-Benchmark benchmark_alloc("DxvkBuffer::allocSlice_optimize");
-Benchmark benchmark_free("DxvkBuffer::freeSlice_optimize");
-
-
 namespace dxvk {
 
   sync::Allocator sync::g_alloc( sizeof(

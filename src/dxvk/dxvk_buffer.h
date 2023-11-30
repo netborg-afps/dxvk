@@ -10,11 +10,7 @@
 #include "dxvk_resource.h"
 #include "dxvk_sparse.h"
 
-#include "../util/util_benchmark.h"
 #include "../util/sync/sync_bitset_storage.h"
-
-extern Benchmark benchmark_alloc;
-extern Benchmark benchmark_free;
 
 namespace dxvk {
 
@@ -275,7 +271,6 @@ namespace dxvk {
      * \returns The new buffer slice
      */
     DxvkBufferSliceHandle allocSlice() {
-      BENCH_SCOPE(benchmark_alloc);
       DxvkBufferSliceHandle result;
       if( likely(m_bitsetStorage.tryPop(result)) ) {
         return result;
@@ -295,7 +290,6 @@ namespace dxvk {
      * \param [in] slice The buffer slice to free
      */
     void freeSlice(const DxvkBufferSliceHandle& slice) {
-      BENCH_SCOPE(benchmark_free);
       m_bitsetStorage.push(slice);
     }
 
