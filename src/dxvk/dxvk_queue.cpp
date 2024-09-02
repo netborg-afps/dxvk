@@ -1,6 +1,8 @@
 #include "dxvk_device.h"
 #include "dxvk_queue.h"
 
+#include "../util/framepacer/framepacer_stats.h"
+
 namespace dxvk {
   
   DxvkSubmissionQueue::DxvkSubmissionQueue(DxvkDevice* device, const DxvkQueueCallback& callback)
@@ -29,6 +31,11 @@ namespace dxvk {
   void DxvkSubmissionQueue::submit(DxvkSubmitInfo submitInfo, DxvkSubmitStatus* status) {
     std::unique_lock<dxvk::mutex> lock(m_mutex);
 
+    if (m_lastSubmitFrameId) {
+      g_frameStatsStorage->registerAppThreadStartsSubmitting(m_lastSubmitFrameId+1);
+      m_lastSubmitFrameId = 0;
+    }
+
     m_finishCond.wait(lock, [this] {
       return m_submitQueue.size() + m_finishQueue.size() <= MaxNumQueuedCommandBuffers;
     });
@@ -48,6 +55,8 @@ namespace dxvk {
     DxvkSubmitEntry entry = { };
     entry.status  = status;
     entry.present = std::move(presentInfo);
+
+    m_lastSubmitFrameId = presentInfo.frameId;
 
     m_submitQueue.push(std::move(entry));
     m_appendCond.notify_all();
@@ -127,8 +136,10 @@ namespace dxvk {
 
         if (entry.submit.cmdList != nullptr)
           entry.result = entry.submit.cmdList->submit();
-        else if (entry.present.presenter != nullptr)
+        else if (entry.present.presenter != nullptr) {
+          g_frameStatsStorage->registerSubmitFinished(entry.present.frameId);
           entry.result = entry.present.presenter->presentImage(entry.present.presentMode, entry.present.frameId);
+        }
 
         if (m_callback)
           m_callback(false);
@@ -201,7 +212,8 @@ namespace dxvk {
       } else if (entry.present.presenter != nullptr) {
         // Signal the frame and then immediately destroy the reference.
         // This is necessary since the front-end may want to explicitly
-        // destroy the presenter object. 
+        // destroy the presenter object.
+        g_frameStatsStorage->registerGPUFinished(entry.present.frameId);
         entry.present.presenter->signalFrame(entry.result,
           entry.present.presentMode, entry.present.frameId);
         entry.present.presenter = nullptr;

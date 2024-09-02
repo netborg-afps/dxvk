@@ -180,6 +180,7 @@ namespace dxvk {
     DxvkQueueCallback           m_callback;
 
     std::atomic<VkResult>       m_lastError = { VK_SUCCESS };
+    uint64_t                    m_lastSubmitFrameId = { 0 };
     
     std::atomic<bool>           m_stopped = { false };
     std::atomic<uint64_t>       m_gpuIdle = { 0ull };

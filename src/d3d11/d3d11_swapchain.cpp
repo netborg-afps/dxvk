@@ -2,7 +2,7 @@
 #include "d3d11_device.h"
 #include "d3d11_swapchain.h"
 
-#include "../util/util_win32_compat.h"
+#include "../util/framepacer/framepacer_stats.h"
 
 namespace dxvk {
 
@@ -673,6 +673,8 @@ namespace dxvk {
       m_frameStatistics.PresentCount = cFrameId - DXGI_MAX_SWAP_CHAIN_BUFFERS;
       m_frameStatistics.PresentQPCTime = dxvk::high_resolution_clock::get_counter();
     });
+
+    g_frameStatsStorage->registerFrameStart(m_frameId+1);
   }
 
 

@@ -210,7 +210,7 @@ namespace dxvk::hud {
 
 
   /**
-   * \brief HUD item to display the frame rate
+   * \brief HUD item to display frametime graph
    */
   class HudFrameTimeItem : public HudItem {
     constexpr static size_t NumDataPoints = 304;
@@ -236,6 +236,43 @@ namespace dxvk::hud {
 
   };
 
+
+  /**
+   * \brief HUD item to display latency graph
+   */
+  class HudFrameLatencyItem : public HudItem {
+    constexpr static size_t NumDataPoints = 304;
+  public:
+
+    HudFrameLatencyItem();
+
+    ~HudFrameLatencyItem();
+
+    void update(dxvk::high_resolution_clock::time_point time);
+
+    HudPos render(
+            HudRenderer&      renderer,
+            HudPos            position);
+
+    static void renderText(
+            HudRenderer&      renderer,
+            HudPos            position,
+            uint32_t          minUs,
+            uint32_t          avgUs,
+            uint32_t          maxUs
+            );
+
+  private:
+
+// todo: optimize reading and average calculation
+
+//    dxvk::high_resolution_clock::time_point m_lastUpdate
+//      = dxvk::high_resolution_clock::now();
+//
+//    std::array<float, NumDataPoints>  m_dataPoints  = {};
+//    uint32_t                          m_dataPointId = 0;
+
+  };
 
   /**
    * \brief HUD item to display queue statistics

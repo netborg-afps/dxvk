@@ -4,8 +4,12 @@
 #include "dxvk_presenter.h"
 
 #include "../wsi/wsi_window.h"
+#include "../util/framepacer/framepacer_stats.h"
 
 namespace dxvk {
+
+  std::unique_ptr<FrameStatsStorage> g_frameStatsStorage = std::make_unique<FrameStatsStorage>();
+
 
   Presenter::Presenter(
     const Rc<DxvkDevice>&   device,
@@ -130,6 +134,7 @@ namespace dxvk {
       m_frameQueue.push(frame);
       m_frameCond.notify_one();
     } else {
+      g_frameStatsStorage->registerFrameEnd(frameId);
       m_fpsLimiter.delay();
       m_signal->signal(frameId);
     }
@@ -677,6 +682,8 @@ namespace dxvk {
         if (vr < 0 && vr != VK_ERROR_OUT_OF_DATE_KHR && vr != VK_ERROR_SURFACE_LOST_KHR)
           Logger::err(str::format("Presenter: vkWaitForPresentKHR failed: ", vr));
       }
+
+      g_frameStatsStorage->registerFrameEnd(frame.frameId);
 
       // Apply FPS limtier here to align it as closely with scanout as we can,
       // and delay signaling the frame latency event to emulate behaviour of a

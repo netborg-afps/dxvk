@@ -1,4 +1,5 @@
 #include "dxvk_hud_item.h"
+#include "../util/framepacer/framepacer_stats.h"
 
 #include <iomanip>
 #include <version.h>
@@ -288,6 +289,162 @@ namespace dxvk::hud {
     
     position.y += 4.0f;
     return position;
+  }
+
+
+  HudFrameLatencyItem::HudFrameLatencyItem() { }
+  HudFrameLatencyItem::~HudFrameLatencyItem() { }
+
+
+  void HudFrameLatencyItem::update(dxvk::high_resolution_clock::time_point time) {}
+
+
+  HudPos HudFrameLatencyItem::render(
+          HudRenderer&      renderer,
+          HudPos            position) {
+
+    // note: if producerIndex changes during this, this might be slightly incorrect (fixme)
+    //       no need to change reader semantics though cause we'll optimize it to only
+    //       use one reader that fetches new data frame by frame
+
+    std::array<HudGraphPoint, NumDataPoints> points0;
+    std::array<HudGraphPoint, NumDataPoints> points1;
+    std::array<HudGraphPoint, NumDataPoints> points2;
+    std::array<HudGraphPoint, NumDataPoints> points3;
+    FrameStatsReader mainReader = g_frameStatsStorage->getReader(NumDataPoints);
+    uint32_t readerNumStats = mainReader.getNumStatsAvailable();
+    uint32_t readerSkipNumStats = NumDataPoints - readerNumStats;
+
+    if (readerNumStats == 0) {
+      position.y += 4.0f;
+      return position;
+    }
+
+    // todo: optimize reading and average calculation
+    uint32_t latencySumSubmit = 0;
+    uint32_t latencySumPresent = 0;
+    { FrameStatsReader reader(mainReader);
+      FrameStats stats;
+      while (likely(reader.getNext(stats))) {
+        latencySumSubmit += stats.submitLatency;
+        latencySumPresent += stats.presentLatency;
+      }
+    }
+
+    uint32_t latencyAvgSubmit = (uint32_t) ((float) latencySumSubmit / readerNumStats);
+    uint32_t latencyAvgPresent = (uint32_t) ((float) latencySumPresent / readerNumStats);
+
+
+    FrameStatsReader reader(mainReader);
+    uint32_t minUs0 = 0xFFFFFFFFu, minUs1 = 0xFFFFFFFFu;
+    uint32_t maxUs0 = 0x00000000u, maxUs1 = 0x00000000u;
+
+    // Paint the time points
+    for (uint32_t i = 0; i < NumDataPoints; i++) {
+      FrameStats stats;
+      uint32_t usAppThread = 0;
+      uint32_t usSubmit    = 0;
+      uint32_t usFinished  = 0;
+      uint32_t usPresent   = 0;
+
+      if (likely(i>=readerSkipNumStats) && likely(reader.getNext(stats))) {
+        usAppThread = stats.appThreadLatency;
+        usSubmit    = stats.submitLatency;
+        usFinished  = stats.finishedLatency;
+        usPresent   = stats.presentLatency;
+      }
+
+      minUs0 = std::min(minUs0, usPresent);
+      maxUs0 = std::max(maxUs0, usPresent);
+
+      minUs1 = std::min(minUs1, usSubmit);
+      maxUs1 = std::max(maxUs1, usSubmit);
+
+      float hVal0 = (float) usPresent / (2*latencyAvgPresent);
+      float hVal1 = (float) usFinished / (2*latencyAvgPresent);
+      float hVal2 = (float) usSubmit / (2*latencyAvgPresent);
+      float hVal3 = (float) usAppThread / (2*latencyAvgPresent);
+
+      points0[i].value = std::max(hVal0, 1.0f / 40.0f);
+      points0[i].color = HudNormColor{ 255, 255, 0, 255 };
+
+      points1[i].value = std::max(hVal1, 1.0f / 40.0f);
+      points1[i].color = HudNormColor{ 0, 255, 0, 255 };
+
+      points2[i].value = std::max(hVal2, 1.0f / 40.0f);
+      points2[i].color = HudNormColor{ 255, 128, 0, 255 };
+
+      points3[i].value = std::max(hVal3, 1.0f / 40.0f);
+      points3[i].color = HudNormColor{ 16, 70, 200, 255 };
+    }
+
+    if (maxUs0 == 0) {
+      position.y += 4.0f;
+      return position;
+    }
+
+    renderer.drawGraph(position,
+      HudPos { float(NumDataPoints), 40.0f },
+      points0.size(), points0.data());
+
+    renderer.drawGraph(position,
+      HudPos { float(NumDataPoints), 40.0f },
+      points1.size(), points1.data());
+
+    renderer.drawGraph(position,
+      HudPos { float(NumDataPoints), 40.0f },
+      points2.size(), points2.data());
+
+    renderer.drawGraph(position,
+      HudPos { float(NumDataPoints), 40.0f },
+      points3.size(), points3.data());
+
+    position.y += 58.0f;
+
+    renderText(renderer, position, minUs0, latencyAvgPresent, maxUs0);
+    position.y += 16.0f;
+    renderText(renderer, position, minUs1, latencyAvgSubmit, maxUs1);
+
+    position.y += 4.0f;
+    return position;
+  }
+
+
+  void HudFrameLatencyItem::renderText(
+        HudRenderer&      renderer,
+        HudPos            position,
+        uint32_t          minUs,
+        uint32_t          avgUs,
+        uint32_t          maxUs) {
+    renderer.drawText(12.0f,
+      { position.x, position.y },
+      { 1.0f, 0.25f, 0.25f, 1.0f },
+      "min:");
+
+    renderer.drawText(12.0f,
+      { position.x + 45.0f, position.y },
+      { 1.0f, 1.0f, 1.0f, 1.0f },
+      str::format(minUs / 1000, ".", (minUs/100) % 10));
+
+    renderer.drawText(12.0f,
+      { position.x + 90.0f, position.y },
+      { 1.0f, 0.25f, 0.25f, 1.0f },
+      "avg:");
+
+    renderer.drawText(12.0f,
+      { position.x + 135.0f, position.y },
+      { 1.0f, 1.0f, 1.0f, 1.0f },
+      str::format(avgUs / 1000, ".", (avgUs/100) % 10));
+
+    renderer.drawText(12.0f,
+      { position.x + 180.0f, position.y },
+      { 1.0f, 0.25f, 0.25f, 1.0f },
+      "max:");
+
+    renderer.drawText(12.0f,
+      { position.x + 225.0f, position.y },
+      { 1.0f, 1.0f, 1.0f, 1.0f },
+      str::format(maxUs / 1000, ".", (maxUs/100) % 10));
   }
 
 

@@ -5,6 +5,8 @@
 #include "d3d9_hud.h"
 #include "d3d9_window.h"
 
+#include "../util/framepacer/framepacer_stats.h"
+
 namespace dxvk {
 
   static uint16_t MapGammaControlPoint(float x) {
@@ -1127,6 +1129,7 @@ namespace dxvk {
   void D3D9SwapChainEx::SyncFrameLatency() {
     // Wait for the sync event so that we respect the maximum frame latency
     m_wctx->frameLatencySignal->wait(m_wctx->frameId - GetActualFrameLatency());
+    g_frameStatsStorage->registerFrameStart(m_wctx->frameId+1);
   }
 
   void D3D9SwapChainEx::SetApiName(const char* name) {
