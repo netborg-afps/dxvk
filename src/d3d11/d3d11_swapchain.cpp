@@ -2,6 +2,7 @@
 #include "d3d11_device.h"
 #include "d3d11_swapchain.h"
 
+#include "../util/util_win32_compat.h"
 #include "../util/framepacer/framepacer_stats.h"
 
 namespace dxvk {
