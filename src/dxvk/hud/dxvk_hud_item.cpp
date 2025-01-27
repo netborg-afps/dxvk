@@ -1,4 +1,5 @@
 #include "dxvk_hud_item.h"
+#include "../framepacer/dxvk_framepacer.h"
 
 #include <hud_chunk_frag_background.h>
 #include <hud_chunk_frag_visualize.h>
@@ -205,6 +206,61 @@ namespace dxvk::hud {
     renderer.drawText(16, position, 0xff4040ffu, "FPS:");
     renderer.drawText(16, { position.x + 60, position.y },
       0xffffffffu, m_frameRate);
+
+    position.y += 8;
+    return position;
+  }
+
+
+  HudRenderLatencyItem::HudRenderLatencyItem( const Rc<DxvkDevice>& device )
+  : m_latencyMarkersStorage(&device->m_framePacer->m_latencyMarkersStorage) { }
+  HudRenderLatencyItem::~HudRenderLatencyItem() { }
+
+
+  void HudRenderLatencyItem::update(dxvk::high_resolution_clock::time_point time) {
+    // we cannot measure latency when fps-limiting is performed in present()
+    // because it's interfering with getting the right timestamp from vkWaitForPresent()
+    // if we truely wanted to measure it, we would need one additional thread
+    // hint: it's less responsive but smoother than low-latency fps-limiting
+    if (FpsLimiter::m_isActive) {
+      m_latency = "N/A";
+      return;
+    }
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(time - m_lastUpdate);
+
+    if (elapsed.count() >= UpdateInterval) {
+      m_lastUpdate = time;
+
+      LatencyMarkersReader reader = m_latencyMarkersStorage->getReader(100);
+      const LatencyMarkers* markers;
+      uint32_t count = 0;
+      uint64_t totalLatency = 0;
+      while (reader.getNext(markers)) {
+        totalLatency += markers->presentFinished;
+        ++count;
+      }
+
+      if (!count)
+        return;
+
+      uint64_t latency = totalLatency / count;
+      m_latency = str::format(latency / 1000, ".", (latency/100) % 10, " ms");
+    }
+  }
+
+
+  HudPos HudRenderLatencyItem::render(
+    const DxvkContextObjects& ctx,
+    const HudPipelineKey&     key,
+    const HudOptions&         options,
+          HudRenderer&        renderer,
+          HudPos              position) {
+
+    position.y += 12;
+    renderer.drawText(16, position, 0xff4040ffu, "Render latency:");
+    renderer.drawText(16, { position.x + 195, position.y },
+      0xffffffffu, m_latency);
 
     position.y += 8;
     return position;
