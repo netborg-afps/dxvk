@@ -48,6 +48,14 @@ namespace dxvk {
     /// Allows full-screen exclusive mode on Windows
     bool allowFse = false;
 
+    /// Frame pacing
+    std::string framePace;
+
+    /// A value in microseconds to fine-tune the low-latency frame pacing.
+    /// Positive values make a frame begin later which might improve responsiveness.
+    /// Negative values make a frame begin earlier which might improve fps.
+    int32_t lowLatencyOffset;
+
     // Device name
     std::string deviceFilter;
   };
