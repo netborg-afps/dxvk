@@ -2,6 +2,7 @@
 
 #include "dxvk_device.h"
 #include "dxvk_presenter.h"
+#include "framepacer/dxvk_framepacer.h"
 
 #include "../wsi/wsi_window.h"
 
@@ -13,7 +14,8 @@ namespace dxvk {
     const PresenterDesc&    desc)
   : m_device(device), m_signal(signal),
     m_vki(device->instance()->vki()),
-    m_vkd(device->vkd()) {
+    m_vkd(device->vkd()),
+    m_fpsLimiter(device->m_framePacer.get()) {
     // Only enable FSE if the user explicitly opts in. On Windows, FSE
     // is required to support VRR or HDR, but blocks alt-tabbing or
     // overlapping windows, which breaks a number of games.
@@ -150,6 +152,7 @@ namespace dxvk {
       m_frameQueue.push(frame);
       m_frameCond.notify_one();
     } else {
+      m_device->m_framePacer->endFrame(frameId);
       m_fpsLimiter.delay();
       m_signal->signal(frameId);
     }
@@ -451,6 +454,7 @@ namespace dxvk {
 
   void Presenter::setFrameRateLimit(double frameRate, uint32_t maxLatency) {
     m_fpsLimiter.setTargetFrameRate(frameRate, maxLatency);
+    m_device->m_framePacer->setTargetFrameRate(frameRate);
   }
 
 
@@ -726,13 +730,15 @@ namespace dxvk {
       // If the present operation has succeeded, actually wait for it to complete.
       // Don't bother with it on MAILBOX / IMMEDIATE modes since doing so would
       // restrict us to the display refresh rate on some platforms (XWayland).
-      if (frame.result >= 0 && (frame.mode == VK_PRESENT_MODE_FIFO_KHR || frame.mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR)) {
+      if (frame.result >= 0 && (frame.mode == VK_PRESENT_MODE_FIFO_KHR || frame.mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR || m_device->m_framePacer->getMode()) ) {
         VkResult vr = m_vkd->vkWaitForPresentKHR(m_vkd->device(),
           m_swapchain, frame.frameId, std::numeric_limits<uint64_t>::max());
 
         if (vr < 0 && vr != VK_ERROR_OUT_OF_DATE_KHR && vr != VK_ERROR_SURFACE_LOST_KHR)
           Logger::err(str::format("Presenter: vkWaitForPresentKHR failed: ", vr));
       }
+
+      m_device->m_framePacer->endFrame(frame.frameId);
 
       // Apply FPS limtier here to align it as closely with scanout as we can,
       // and delay signaling the frame latency event to emulate behaviour of a

@@ -6,6 +6,8 @@
 #include "util_time.h"
 
 namespace dxvk {
+
+  class FramePacer;
   
   /**
    * \brief Frame rate limiter
@@ -20,7 +22,7 @@ namespace dxvk {
     /**
      * \brief Creates frame rate limiter
      */
-    FpsLimiter();
+    FpsLimiter( const FramePacer* framePacer );
 
     ~FpsLimiter();
 
@@ -39,6 +41,8 @@ namespace dxvk {
      */
     void delay();
 
+    static std::atomic<bool> m_isActive;
+
   private:
 
     using TimePoint = dxvk::high_resolution_clock::time_point;
@@ -55,6 +59,8 @@ namespace dxvk {
     uint32_t        m_heuristicFrameCount = 0;
     TimePoint       m_heuristicFrameTime  = TimePoint();
     bool            m_heuristicEnable     = false;
+
+    const FramePacer* m_framePacer;
 
     bool testRefreshHeuristic(TimerDuration interval, TimePoint now, uint32_t maxLatency);
 

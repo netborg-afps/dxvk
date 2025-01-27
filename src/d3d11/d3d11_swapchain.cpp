@@ -3,6 +3,7 @@
 #include "d3d11_swapchain.h"
 
 #include "../util/util_win32_compat.h"
+#include "../dxvk/framepacer/dxvk_framepacer.h"
 
 namespace dxvk {
 
@@ -684,6 +685,7 @@ namespace dxvk {
   void D3D11SwapChain::SyncFrameLatency() {
     // Wait for the sync event so that we respect the maximum frame latency
     m_frameLatencySignal->wait(m_frameId - GetActualFrameLatency());
+    m_device->m_framePacer->startFrame(m_frameId+1);
 
     m_frameLatencySignal->setCallback(m_frameId, [this,
       cFrameId           = m_frameId,

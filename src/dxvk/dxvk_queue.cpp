@@ -1,5 +1,6 @@
 #include "dxvk_device.h"
 #include "dxvk_queue.h"
+#include "framepacer/dxvk_framepacer.h"
 
 namespace dxvk {
   
@@ -43,6 +44,7 @@ namespace dxvk {
   
   
   void DxvkSubmissionQueue::submit(DxvkSubmitInfo submitInfo, DxvkSubmitStatus* status) {
+    m_device->m_framePacer->onSubmitCmdList();
     std::unique_lock<dxvk::mutex> lock(m_mutex);
 
     m_finishCond.wait(lock, [this] {
@@ -59,6 +61,7 @@ namespace dxvk {
 
 
   void DxvkSubmissionQueue::present(DxvkPresentInfo presentInfo, DxvkSubmitStatus* status) {
+    m_device->m_framePacer->onSubmitPresent(presentInfo.frameId);
     std::unique_lock<dxvk::mutex> lock(m_mutex);
 
     DxvkSubmitEntry entry = { };
@@ -214,6 +217,7 @@ namespace dxvk {
         VkResult status = m_lastError.load();
 
         if (status != VK_ERROR_DEVICE_LOST) {
+          m_device->m_framePacer->onFinishedQueueCmdList();
           std::array<VkSemaphore, 2> semaphores = { m_semaphores.graphics, m_semaphores.transfer };
           std::array<uint64_t, 2> timelines = { entry.timelines.graphics, entry.timelines.transfer };
 
@@ -223,6 +227,7 @@ namespace dxvk {
           waitInfo.pValues = timelines.data();
 
           status = vk->vkWaitSemaphores(vk->device(), &waitInfo, ~0ull);
+          m_device->m_framePacer->onFinishedGpuActivity();
         }
 
         if (status != VK_SUCCESS) {
@@ -234,7 +239,8 @@ namespace dxvk {
       } else if (entry.present.presenter != nullptr) {
         // Signal the frame and then immediately destroy the reference.
         // This is necessary since the front-end may want to explicitly
-        // destroy the presenter object. 
+        // destroy the presenter object.
+        m_device->m_framePacer->onFinishedQueuePresent(entry.present.frameId);
         entry.present.presenter->signalFrame(entry.result,
           entry.present.presentMode, entry.present.frameId);
         entry.present.presenter = nullptr;

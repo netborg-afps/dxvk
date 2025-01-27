@@ -28,7 +28,7 @@
 namespace dxvk {
   
   class DxvkInstance;
-
+  class FramePacer;
 
   /**
    * \brief Device performance hints
@@ -576,6 +576,8 @@ namespace dxvk {
      * used by the GPU can be safely destroyed.
      */
     void waitForIdle();
+
+    std::unique_ptr<FramePacer> m_framePacer;
     
   private:
     

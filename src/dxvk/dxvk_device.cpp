@@ -1,5 +1,6 @@
 #include "dxvk_device.h"
 #include "dxvk_instance.h"
+#include "framepacer/dxvk_framepacer.h"
 
 namespace dxvk {
   
@@ -20,7 +21,7 @@ namespace dxvk {
     m_perfHints         (getPerfHints()),
     m_objects           (this),
     m_submissionQueue   (this, queueCallback) {
-
+    m_framePacer      = std::make_unique<FramePacer>(instance->options());
   }
   
   

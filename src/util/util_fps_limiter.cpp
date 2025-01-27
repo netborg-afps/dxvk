@@ -5,14 +5,18 @@
 #include "util_fps_limiter.h"
 #include "util_sleep.h"
 #include "util_string.h"
+#include "../dxvk/framepacer/dxvk_framepacer.h"
 
 #include "./log/log.h"
 
 using namespace std::chrono_literals;
 
 namespace dxvk {
+
+  std::atomic<bool> FpsLimiter::m_isActive = { false };
   
-  FpsLimiter::FpsLimiter() {
+  FpsLimiter::FpsLimiter( const FramePacer* framePacer )
+  : m_framePacer(framePacer) {
     std::string env = env::getEnvVar("DXVK_FRAME_RATE");
 
     if (!env.empty()) {
@@ -47,12 +51,18 @@ namespace dxvk {
         m_heuristicEnable = false;
 
         m_maxLatency = maxLatency;
+
+        if (!m_framePacer->getMode())
+          m_isActive.store( m_targetInterval != TimerDuration::zero() );
       }
     }
   }
 
 
   void FpsLimiter::delay() {
+    if (m_framePacer->getMode())
+      return;
+
     std::unique_lock<dxvk::mutex> lock(m_mutex);
     auto interval = m_targetInterval;
     auto latency = m_maxLatency;
