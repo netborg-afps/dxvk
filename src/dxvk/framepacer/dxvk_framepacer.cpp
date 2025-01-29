@@ -9,7 +9,7 @@ namespace dxvk {
 
 
   FramePacer::FramePacer( const DxvkOptions& options ) {
-    FramePacerMode::Mode mode = FramePacerMode::MAX_FRAME_LATENCY;
+    FramePacerMode::Mode mode = FramePacerMode::LOW_LATENCY;
 
     std::string configStr = env::getEnvVar("DXVK_FRAME_PACE");
 
