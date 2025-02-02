@@ -41,6 +41,7 @@ namespace dxvk {
       // the frame has been displayed to the screen
       m_latencyMarkersStorage.registerFrameEnd(frameId);
       m_mode->endFrame(frameId);
+      m_mode->signalPresent(frameId);
     }
 
     void onSubmitCmdList() {
@@ -53,11 +54,11 @@ namespace dxvk {
       auto now = high_resolution_clock::now();
       m_lastSubmitFrameId = frameId;
       LatencyMarkers* m = m_latencyMarkersStorage.getMarkers(frameId);
-      m->cpuFinished = std::chrono::duration_cast<microseconds>(now - m->start).count();
-      m_latencyMarkersStorage.m_timeline.cpuFinished.store(frameId);
-
       LatencyMarkers* next = m_latencyMarkersStorage.getMarkers(frameId+1);
+      m->cpuFinished = std::chrono::duration_cast<microseconds>(now - m->start).count();
       next->gpuSubmit.clear();
+
+      m_latencyMarkersStorage.m_timeline.cpuFinished.store(frameId);
     }
 
     void onFinishedQueueCmdList() {

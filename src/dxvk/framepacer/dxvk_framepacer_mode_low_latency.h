@@ -32,7 +32,8 @@ namespace dxvk {
    */
 
   class LowLatencyMode : public FramePacerMode {
-
+    using microseconds = std::chrono::microseconds;
+    using time_point = high_resolution_clock::time_point;
   public:
 
     LowLatencyMode(Mode mode, LatencyMarkersStorage* storage, const DxvkOptions& options)
@@ -43,104 +44,199 @@ namespace dxvk {
 
     ~LowLatencyMode() {}
 
+
     void startFrame( uint64_t frameId ) override {
 
-      using std::chrono::microseconds;
       using std::chrono::duration_cast;
-      using time_point = high_resolution_clock::time_point;
 
       m_fenceGpuStart.wait( frameId-1 );
+
+      // we wanted this in there (not sure if needed), but we got some
+      // hard to reproduce spurious deadlocks, so disabled for now
+      //   m_fenceCpuFinished.wait( frameId-1 );
+
       time_point now = high_resolution_clock::now();
 
-      // estimates the optimal overlap for cpu/gpu work via min( gpuReady - gpuSubmit )
-      // note that gpuReady - gpuSubmit may be negative
-
-      uint64_t id = m_latencyMarkersStorage->getTimeline()->gpuFinished.load();
-      if (id <= DXGI_MAX_SWAP_CHAIN_BUFFERS+1ull)
+      uint64_t finishedId = m_latencyMarkersStorage->getTimeline()->gpuFinished.load();
+      if (finishedId <= DXGI_MAX_SWAP_CHAIN_BUFFERS+1ull)
         return;
 
-      const LatencyMarkers* markers = m_latencyMarkersStorage->getConstMarkers(id);
-      size_t bestIndex = 0;
-      int32_t bestDiff = std::numeric_limits<int32_t>::max();
-      size_t numLoop = std::min( std::min(markers->gpuReady.size(), markers->gpuSubmit.size()), markers->gpuRun.size() );
-      if (numLoop == 0)
-        return;
+      // we are the only in-flight frame, nothing to do other then to apply fps-limiter if needed
 
-      for (size_t i=0; i<numLoop; ++i) {
-        int32_t diff = duration_cast<microseconds>( markers->gpuReady[i] - markers->gpuSubmit[i] ).count();
-        if (diff < bestDiff) {
-          bestDiff = diff;
-          bestIndex = i;
-        }
+      if (finishedId == frameId-1) {
+        m_lastStart = sleepFor( now, 0 );
+        return;
       }
 
-      // estimate the target gpu finishing time for this frame
+      assert(finishedId == frameId-2);
+      const LatencyMarkers* m2 = m_latencyMarkersStorage->getConstMarkers(finishedId);
+      const LatencyMarkers* m1 = m_latencyMarkersStorage->getConstMarkers(frameId-1);
+      const SyncProps props = getPrediction();
+
+      size_t numLoop = std::min( std::min(m2->gpuReady.size(), m2->gpuSubmit.size()), m2->gpuRun.size() );
+      if (numLoop == 0 || m1->gpuRun.empty()) {
+        m_lastStart = sleepFor( now, 0 );
+        return;
+      }
+
+      // estimate the target gpu sync point for this frame
       // and calculate backwards when we want to start this frame
 
-      int32_t gpuTime = getGpuTimePrediction();
-      const LatencyMarkers* markersPrev = m_latencyMarkersStorage->getConstMarkers(frameId-1);
-      time_point targetGpuFinish = markersPrev->start + microseconds( markersPrev->gpuStart + 2*gpuTime );
+      int32_t gpuReadyPrediction = duration_cast<microseconds>(
+        m1->start + microseconds(getGpuFinishedPrediction()) - now).count();
 
-      if (id == frameId-1)
-        targetGpuFinish = markers->start + microseconds( markers->gpuFinished + gpuTime );
+      int32_t targetGpuSync = gpuReadyPrediction
+        + props.gpuSync;
 
-      time_point targetGpuSync2 = targetGpuFinish
-        - microseconds( duration_cast<microseconds>( markers->gpuLastActive - markers->gpuRun[bestIndex] ).count() );
-
-      int32_t targetGpuSync = duration_cast<microseconds>( targetGpuSync2 - now ).count();
       int32_t delay = targetGpuSync
-        - duration_cast<microseconds>( markers->gpuSubmit[bestIndex] - markers->start ).count()
+        - props.cpuUntilGpuSync
         + m_lowLatencyOffset;
 
-      // account for the fps limit and ensure we won't sleep too long, just in case
+      m_lastStart = sleepFor( now, delay );
 
-      int32_t frametime = duration_cast<microseconds>( now - m_lastStart ).count();
+    }
+
+
+    void finishRender( uint64_t frameId ) override {
+
+      using std::chrono::duration_cast;
+      const LatencyMarkers* m = m_latencyMarkersStorage->getConstMarkers(frameId);
+
+      int32_t numLoop = std::min((int32_t)(m->gpuReady.size())-1, (int32_t)m->gpuRun.size() );
+      assert( m->gpuRun.size() == m->gpuSubmit.size() );
+      if (numLoop <= 0) {
+        m_props[frameId % m_props.size()] = SyncProps();
+        m_props[frameId % m_props.size()].isOutlier = true;
+        m_propsFinished.store( frameId );
+        return;
+      }
+
+      // estimates the optimal overlap for cpu/gpu work by optimizing gpu scheduling first
+      // such that gpu doesn't go into idle for this frame, and then aligning cpu submits
+      // where gpuSubmit[i] <= gpuRun[i] for all i
+
+      std::vector<int32_t>& gpuRun = m_tempGpuRun;
+      gpuRun.clear();
+      int32_t optimizedGpuTime = 0;
+      for (int i=0; i<numLoop; ++i) {
+        gpuRun.push_back(optimizedGpuTime);
+        optimizedGpuTime += duration_cast<microseconds>( m->gpuReady[i+1] - m->gpuRun[i] ).count();
+      }
+
+      int32_t offset = 0;
+      for (int i=1; i<numLoop; ++i) {
+        int32_t curSubmit = duration_cast<microseconds>( m->gpuSubmit[i] - m->gpuSubmit[0] ).count();
+        int32_t diff = curSubmit - gpuRun[i];
+        offset = std::max( offset, diff );
+      }
+
+      SyncProps& props = m_props[frameId % m_props.size()];
+      props.gpuSync = 0;
+      props.cpuUntilGpuSync = offset + duration_cast<microseconds>( m->gpuSubmit[0] - m->start ).count();
+      props.optimizedGpuTime = optimizedGpuTime;
+      props.isOutlier = isOutlier(frameId);
+
+      m_propsFinished.store( frameId );
+
+    }
+
+
+    Sleep::TimePoint sleepFor( const Sleep::TimePoint t, int32_t delay ) {
+
+      // account for the fps limit and ensure we won't sleep too long, just in case
+      int32_t frametime = std::chrono::duration_cast<microseconds>( t - m_lastStart ).count();
       int32_t frametimeDiff = std::max( 0, m_fpsLimitFrametime.load() - frametime );
       delay = std::max( delay, frametimeDiff );
       delay = std::max( 0, std::min( delay, 20000 ) );
 
-      Sleep::TimePoint nextStart = now + microseconds(delay);
-      Sleep::sleepUntil( now, nextStart );
-
-      m_lastStart = nextStart;
+      Sleep::TimePoint nextStart = t + microseconds(delay);
+      Sleep::sleepUntil( t, nextStart );
+      return nextStart;
 
     }
 
-    void finishRender( uint64_t frameId ) override { }
 
   private:
 
-    int32_t getGpuTimePrediction() {
-      // we smooth out gpu running times which are pretty steady to begin with.
-      // we don't do that (yet?) for cpu running times, cause basing it on the
-      // last frame only gave us the best results for now. However using proper
-      // smoothing and outlier rejection is a promising way to further improve
-      // this pacing method.
-      constexpr int32_t numLoop = 7;
-      int32_t i = numLoop;
-      int32_t totalGpuTime = 0;
-      uint64_t id = m_latencyMarkersStorage->getTimeline()->gpuFinished.load();
-      if (id < DXGI_MAX_SWAP_CHAIN_BUFFERS+numLoop)
-        return 0;
+    struct SyncProps {
 
-      while (i>0) {
-        const LatencyMarkers* markers = m_latencyMarkersStorage->getConstMarkers(id);
-        int32_t gpuTime = markers->gpuFinished - markers->gpuStart;
-        totalGpuTime += gpuTime;
-        --id;
-        --i;
+      int32_t optimizedGpuTime;   // gpu time minus idle
+      int32_t gpuSync;            // us after gpuStart
+      int32_t cpuUntilGpuSync;
+      bool    isOutlier;
+
+    };
+
+
+    SyncProps getPrediction() {
+
+      SyncProps res = {};
+      uint64_t id = m_propsFinished;
+      if (id < DXGI_MAX_SWAP_CHAIN_BUFFERS+7)
+        return res;
+
+      for (size_t i=0; i<7; ++i) {
+        const SyncProps& props = m_props[ (id-i) % m_props.size() ];
+        if (!props.isOutlier) {
+          id = id-i;
+          break;
+        }
       }
 
-      return totalGpuTime/numLoop;
+      return m_props[ id % m_props.size() ];
+
+    };
+
+
+    int32_t getGpuFinishedPrediction() {
+
+      uint64_t id = m_propsFinished;
+      if (id < DXGI_MAX_SWAP_CHAIN_BUFFERS+7)
+        return 0;
+
+      for (size_t i=0; i<7; ++i) {
+        const SyncProps& props = m_props[ (id-i) % m_props.size() ];
+        if (!props.isOutlier) {
+          const LatencyMarkers* m = m_latencyMarkersStorage->getConstMarkers(id-i);
+          return m->gpuFinished;
+        }
+      }
+
+      const LatencyMarkers* m = m_latencyMarkersStorage->getConstMarkers(id);
+      return m->gpuFinished;
+
+    };
+
+
+    bool isOutlier( uint64_t frameId ) {
+
+      constexpr size_t numLoop = 7;
+      int32_t totalCpuTime = 0;
+      for (size_t i=0; i<numLoop; ++i) {
+        const LatencyMarkers* m = m_latencyMarkersStorage->getConstMarkers(frameId-i);
+        totalCpuTime += m->cpuFinished;
+      }
+
+      int32_t avgCpuTime = totalCpuTime / numLoop;
+      if (m_latencyMarkersStorage->getConstMarkers(frameId)->cpuFinished > 1.7*avgCpuTime)
+        return true;
+
+      return false;
+
     }
 
+
     bool getLowLatencyOffsetFromEnv( int32_t& offset ) {
+
       if (!getIntFromEnv("DXVK_LOW_LATENCY_OFFSET", &offset))
         return false;
       return offset;
+
     }
 
+
     int32_t getLowLatencyOffset( const DxvkOptions& options ) {
+
       int32_t offset = options.lowLatencyOffset;
       int32_t o;
       if (getLowLatencyOffsetFromEnv(o))
@@ -149,10 +245,15 @@ namespace dxvk {
       offset = std::max( -10000, offset );
       offset = std::min(  10000, offset );
       return offset;
+
     }
+
 
     const int32_t m_lowLatencyOffset;
     Sleep::TimePoint m_lastStart = { high_resolution_clock::now() };
+    std::array<SyncProps, 16> m_props;
+    std::atomic<uint64_t> m_propsFinished = { 0 };
+    std::vector<int32_t>  m_tempGpuRun;
 
   };
 

@@ -36,13 +36,16 @@ namespace dxvk {
     virtual void finishRender( uint64_t frameId ) { }
 
     void wait( uint64_t frameId ) {
-      if (m_mode) m_fence.wait(frameId-m_waitLatency); }
+      if (m_mode) m_fenceGpuFinished.wait(frameId-m_waitLatency); }
 
     void signal( uint64_t frameId ) {
-      if (m_mode) m_fence.signal(frameId); }
+      if (m_mode) m_fenceGpuFinished.signal(frameId); }
 
     void signalGpuStart( uint64_t frameId ) {
       if (m_mode) m_fenceGpuStart.signal(frameId); }
+
+    void signalPresent( uint64_t frameId ) {
+      if (m_mode) m_fencePresent.signal(frameId); }
 
     void setTargetFrameRate( double frameRate ) {
       if (!m_fpsLimitEnvOverride && frameRate > 1.0)
@@ -62,8 +65,9 @@ namespace dxvk {
     std::atomic<int32_t> m_fpsLimitFrametime = { 0 };
     bool m_fpsLimitEnvOverride = { false };
 
-    sync::Fence m_fence = { sync::Fence(DXGI_MAX_SWAP_CHAIN_BUFFERS) };
-    sync::Fence m_fenceGpuStart = { sync::Fence(DXGI_MAX_SWAP_CHAIN_BUFFERS) };
+    sync::Fence m_fencePresent     = { sync::Fence(DXGI_MAX_SWAP_CHAIN_BUFFERS) };
+    sync::Fence m_fenceGpuStart    = { sync::Fence(DXGI_MAX_SWAP_CHAIN_BUFFERS) };
+    sync::Fence m_fenceGpuFinished = { sync::Fence(DXGI_MAX_SWAP_CHAIN_BUFFERS) };
 
   };
 

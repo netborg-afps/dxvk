@@ -4,6 +4,7 @@
 #include <dxgi.h>
 #include <vector>
 #include <array>
+#include <assert.h>
 #include "../../util/util_sleep.h"
 
 
@@ -39,10 +40,10 @@ namespace dxvk {
    */
   struct LatencyMarkersTimeline {
 
-    std::atomic<uint64_t> cpuFinished   = { 0 };
-    std::atomic<uint64_t> gpuStart      = { 0 };
-    std::atomic<uint64_t> gpuFinished   = { 0 };
-    std::atomic<uint64_t> frameFinished = { 0 };
+    std::atomic<uint64_t> cpuFinished   = { DXGI_MAX_SWAP_CHAIN_BUFFERS };
+    std::atomic<uint64_t> gpuStart      = { DXGI_MAX_SWAP_CHAIN_BUFFERS };
+    std::atomic<uint64_t> gpuFinished   = { DXGI_MAX_SWAP_CHAIN_BUFFERS };
+    std::atomic<uint64_t> frameFinished = { DXGI_MAX_SWAP_CHAIN_BUFFERS };
 
   };
 
@@ -75,9 +76,7 @@ namespace dxvk {
     }
 
     void registerFrameStart( uint64_t frameId ) {
-      if (frameId <= m_timeline.frameFinished.load())
-        return;
-
+      assert(frameId > m_timeline.frameFinished.load());
       auto now = high_resolution_clock::now();
 
       LatencyMarkers* markers = getMarkers(frameId);
@@ -85,9 +84,7 @@ namespace dxvk {
     }
 
     void registerFrameEnd( uint64_t frameId ) {
-      if (frameId <= m_timeline.frameFinished.load())
-        return;
-
+      assert(frameId > m_timeline.frameFinished.load());
       auto now = high_resolution_clock::now();
 
       LatencyMarkers* markers = getMarkers(frameId);
@@ -132,7 +129,7 @@ namespace dxvk {
 
 
   inline bool LatencyMarkersReader::getNext( const LatencyMarkers*& result ) {
-    if (m_index > m_storage->m_timeline.frameFinished.load())
+    if (m_index == 0 || m_index > m_storage->m_timeline.frameFinished.load())
       return false;
 
     result = &m_storage->m_markers[m_index % m_storage->m_numMarkers];
