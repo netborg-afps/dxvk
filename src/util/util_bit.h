@@ -1,11 +1,12 @@
 #pragma once
 
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if (defined(__x86_64__) && !defined(__arm64ec__)) || (defined(_M_X64) && !defined(_M_ARM64EC)) \
+    || defined(__i386__) || defined(_M_IX86) || defined(__e2k__)
   #define DXVK_ARCH_X86
-  #if defined(__x86_64__) || defined(_M_X64)
+  #if defined(__x86_64__) || defined(_M_X64) || defined(__e2k__)
     #define DXVK_ARCH_X86_64
   #endif
-#elif defined(__aarch64__) || defined(_M_ARM64)
+#elif defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM64EC)
   #define DXVK_ARCH_ARM64
 #else
 #error "Unknown CPU Architecture"
@@ -29,6 +30,7 @@
 #include "util_likely.h"
 #include "util_math.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -52,21 +54,19 @@ namespace dxvk::bit {
     return (value >> fst) & ~(~T(0) << (lst - fst + 1));
   }
 
-  inline uint32_t popcntStep(uint32_t n, uint32_t mask, uint32_t shift) {
-    return (n & mask) + ((n & ~mask) >> shift);
+  template<typename T>
+  T popcnt(T n) {
+    n -= ((n >> 1u) & T(0x5555555555555555ull));
+    n = (n & T(0x3333333333333333ull)) + ((n >> 2u) & T(0x3333333333333333ull));
+    n = (n + (n >> 4u)) & T(0x0f0f0f0f0f0f0f0full);
+    n *= T(0x0101010101010101ull);
+    return n >> (8u * (sizeof(T) - 1u));
   }
-  
-  inline uint32_t popcnt(uint32_t n) {
-    n = popcntStep(n, 0x55555555, 1);
-    n = popcntStep(n, 0x33333333, 2);
-    n = popcntStep(n, 0x0F0F0F0F, 4);
-    n = popcntStep(n, 0x00FF00FF, 8);
-    n = popcntStep(n, 0x0000FFFF, 16);
-    return n;
-  }
-  
+
   inline uint32_t tzcnt(uint32_t n) {
     #if defined(_MSC_VER) && !defined(__clang__)
+    if(n == 0)
+      return 32;
     return _tzcnt_u32(n);
     #elif defined(__BMI__)
     return __tzcnt_u32(n);
@@ -103,6 +103,8 @@ namespace dxvk::bit {
 
   inline uint32_t tzcnt(uint64_t n) {
     #if defined(DXVK_ARCH_X86_64) && defined(_MSC_VER) && !defined(__clang__)
+    if(n == 0)
+      return 64;
     return (uint32_t)_tzcnt_u64(n);
     #elif defined(DXVK_ARCH_X86_64) && defined(__BMI__)
     return __tzcnt_u64(n);
@@ -131,8 +133,40 @@ namespace dxvk::bit {
     #endif
   }
 
+  inline uint32_t bsf(uint32_t n) {
+    #if (defined(__GNUC__) || defined(__clang__)) && !defined(__BMI__) && defined(DXVK_ARCH_X86)
+    uint32_t res;
+    asm ("tzcnt %1,%0"
+    : "=r" (res)
+    : "r" (n)
+    : "cc");
+    return res;
+    #else
+    return tzcnt(n);
+    #endif
+  }
+
+  inline uint32_t bsf(uint64_t n) {
+    #if (defined(__GNUC__) || defined(__clang__)) && !defined(__BMI__) && defined(DXVK_ARCH_X86_64)
+    uint64_t res;
+    asm ("tzcnt %1,%0"
+    : "=r" (res)
+    : "r" (n)
+    : "cc");
+    return res;
+    #else
+    return tzcnt(n);
+    #endif
+  }
+
   inline uint32_t lzcnt(uint32_t n) {
-    #if (defined(_MSC_VER) && !defined(__clang__)) || defined(__LZCNT__)
+    #if defined(_MSC_VER) && !defined(__clang__) && !defined(__LZCNT__)
+    unsigned long bsr;
+    if(n == 0)
+      return 32;
+    _BitScanReverse(&bsr, n);
+    return 31-bsr;
+    #elif (defined(_MSC_VER) && !defined(__clang__)) || defined(__LZCNT__)
     return _lzcnt_u32(n);
     #elif defined(__GNUC__) || defined(__clang__)
     return n != 0 ? __builtin_clz(n) : 32;
@@ -148,6 +182,24 @@ namespace dxvk::bit {
     if (n <= 0x7FFFFFFF) { r += 1;  n <<= 1; }
 
     return r;
+    #endif
+  }
+
+  inline uint32_t lzcnt(uint64_t n) {
+    #if defined(_MSC_VER) && !defined(__clang__) && !defined(__LZCNT__) && defined(DXVK_ARCH_X86_64)
+    unsigned long bsr;
+    if(n == 0)
+      return 64;
+    _BitScanReverse64(&bsr, n);
+    return 63-bsr;
+    #elif defined(DXVK_ARCH_X86_64) && ((defined(_MSC_VER) && !defined(__clang__)) && defined(__LZCNT__))
+    return _lzcnt_u64(n);
+    #elif defined(DXVK_ARCH_X86_64) && (defined(__GNUC__) || defined(__clang__))
+    return n != 0 ? __builtin_clzll(n) : 64;
+    #else
+    uint32_t lo = uint32_t(n);
+    uint32_t hi = uint32_t(n >> 32u);
+    return hi ? lzcnt(hi) : lzcnt(lo) + 32u;
     #endif
   }
 
@@ -168,6 +220,37 @@ namespace dxvk::bit {
     shift += count;
     return shift > Bits ? shift - Bits : 0;
   }
+
+
+  /**
+   * \brief Clears cache lines of memory
+   *
+   * Uses non-temporal stores. The memory region offset
+   * and size are assumed to be aligned to 64 bytes.
+   * \param [in] mem Memory region to clear
+   * \param [in] size Number of bytes to clear
+   */
+  inline void bclear(void* mem, size_t size) {
+    #if defined(DXVK_ARCH_X86) && (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER))
+    auto zero = _mm_setzero_si128();
+
+    #if defined(__clang__)
+    #pragma nounroll
+    #elif defined(__GNUC__)
+    #pragma GCC unroll 0
+    #endif
+    for (size_t i = 0; i < size; i += 64u) {
+      auto* ptr = reinterpret_cast<__m128i*>(mem) + i / sizeof(zero);
+      _mm_stream_si128(ptr + 0u, zero);
+      _mm_stream_si128(ptr + 1u, zero);
+      _mm_stream_si128(ptr + 2u, zero);
+      _mm_stream_si128(ptr + 3u, zero);
+    }
+    #else
+    std::memset(mem, 0, size);
+    #endif
+  }
+
 
   /**
    * \brief Compares two aligned structs bit by bit
@@ -449,6 +532,7 @@ namespace dxvk::bit {
 
   };
 
+  template<typename T>
   class BitMask {
 
   public:
@@ -456,12 +540,12 @@ namespace dxvk::bit {
     class iterator {
     public:
       using iterator_category = std::input_iterator_tag;
-      using value_type = uint32_t;
-      using difference_type = uint32_t;
-      using pointer = const uint32_t*;
-      using reference = uint32_t;
+      using value_type = T;
+      using difference_type = T;
+      using pointer = const T*;
+      using reference = T;
 
-      explicit iterator(uint32_t flags)
+      explicit iterator(T flags)
         : m_mask(flags) { }
 
       iterator& operator ++ () {
@@ -475,17 +559,8 @@ namespace dxvk::bit {
         return retval;
       }
 
-      uint32_t operator * () const {
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(__BMI__) && defined(DXVK_ARCH_X86)
-        uint32_t res;
-        asm ("tzcnt %1,%0"
-        : "=r" (res)
-        : "r" (m_mask)
-        : "cc");
-        return res;
-#else
-        return tzcnt(m_mask);
-#endif
+      T operator * () const {
+        return bsf(m_mask);
       }
 
       bool operator == (iterator other) const { return m_mask == other.m_mask; }
@@ -493,14 +568,14 @@ namespace dxvk::bit {
 
     private:
 
-      uint32_t m_mask;
+      T m_mask;
 
     };
 
     BitMask()
       : m_mask(0) { }
 
-    BitMask(uint32_t n)
+    explicit BitMask(T n)
       : m_mask(n) { }
 
     iterator begin() {
@@ -513,7 +588,131 @@ namespace dxvk::bit {
 
   private:
 
-    uint32_t m_mask;
+    T m_mask;
 
   };
+
+
+  /**
+   * \brief Encodes float as fixed point
+   *
+   * Rounds away from zero. If this is not suitable for
+   * certain use cases, implement round to nearest even.
+   * \tparam T Integer type, may be signed
+   * \tparam I Integer bits
+   * \tparam F Fractional bits
+   * \param n Float to encode
+   * \returns Encoded fixed-point value
+   */
+  template<typename T, int32_t I, int32_t F>
+  T encodeFixed(float n) {
+    if (n != n)
+      return 0u;
+
+    n *= float(1u << F);
+
+    if constexpr (std::is_signed_v<T>) {
+      n = std::max(n, -float(1u << (I + F - 1u)));
+      n = std::min(n,  float(1u << (I + F - 1u)) - 1.0f);
+      n += n < 0.0f ? -0.5f : 0.5f;
+    } else {
+      n = std::max(n, 0.0f);
+      n = std::min(n, float(1u << (I + F)) - 1.0f);
+      n += 0.5f;
+    }
+
+    T result = T(n);
+
+    if constexpr (std::is_signed_v<T>)
+      result &= ((T(1u) << (I + F)) - 1u);
+
+    return result;
+  }
+
+
+  /**
+   * \brief Decodes fixed-point integer to float
+   *
+   * \tparam T Integer type, may be signed
+   * \tparam I Integer bits
+   * \tparam F Fractional bits
+   * \param n Number to decode
+   * \returns Decoded  number
+   */
+  template<typename T, int32_t I, int32_t F>
+  float decodeFixed(T n) {
+    // Sign-extend as necessary
+    if constexpr (std::is_signed_v<T>)
+      n -= (n & (T(1u) << (I + F - 1u))) << 1u;
+
+    return float(n) / float(1u << F);
+  }
+
+
+  /**
+   * \brief Inserts one null bit after each bit
+   */
+  inline uint32_t split2(uint32_t c) {
+    c = (c ^ (c << 8u)) & 0x00ff00ffu;
+    c = (c ^ (c << 4u)) & 0x0f0f0f0fu;
+    c = (c ^ (c << 2u)) & 0x33333333u;
+    c = (c ^ (c << 1u)) & 0x55555555u;
+    return c;
+  }
+
+
+  /**
+   * \brief Inserts two null bits after each bit
+   */
+  inline uint64_t split3(uint64_t c) {
+    c = (c | c << 32u) & 0x001f00000000ffffull;
+    c = (c | c << 16u) & 0x001f0000ff0000ffull;
+    c = (c | c <<  8u) & 0x100f00f00f00f00full;
+    c = (c | c <<  4u) & 0x10c30c30c30c30c3ull;
+    c = (c | c <<  2u) & 0x1249249249249249ull;
+    return c;
+  }
+
+
+  /**
+   * \brief Interleaves bits from two integers
+   *
+   * Both numbers must fit into 16 bits.
+   * \param [in] x X coordinate
+   * \param [in] y Y coordinate
+   * \returns Morton code of x and y
+   */
+  inline uint32_t interleave(uint16_t x, uint16_t y) {
+    return split2(x) | (split2(y) << 1u);
+  }
+
+
+  /**
+   * \brief Interleaves bits from three integers
+   *
+   * All three numbers must fit into 16 bits.
+   */
+  inline uint64_t interleave(uint16_t x, uint16_t y, uint16_t z) {
+    return split3(x) | (split3(y) << 1u) | (split3(z) << 2u);
+  }
+
+
+  /**
+   * \brief 48-bit integer storage type
+   */
+  struct uint48_t {
+    explicit uint48_t(uint64_t n)
+    : a(uint16_t(n)), b(uint16_t(n >> 16)), c(uint16_t(n >> 32)) { }
+
+    uint16_t a;
+    uint16_t b;
+    uint16_t c;
+
+    explicit operator uint64_t () const {
+      // GCC generates worse code if we promote to uint64 directly
+      uint32_t lo = uint32_t(a) | (uint32_t(b) << 16);
+      return uint64_t(lo) | (uint64_t(c) << 32);
+    }
+  };
+
 }

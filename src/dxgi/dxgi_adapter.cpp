@@ -127,10 +127,13 @@ namespace dxvk {
      || InterfaceName == __uuidof(ID3D10Device1))
       hr = S_OK;
 
-    // We can't really reconstruct the version numbers
-    // returned by Windows drivers from Vulkan data
-    if (SUCCEEDED(hr) && pUMDVersion)
-      pUMDVersion->QuadPart = ~0ull;
+    // Windows drivers return something along the lines of 32.0.xxxxx.yyyy,
+    // so just be conservative here and return a high number. We cannot
+    // reconstruct meaningful UMD versions from Vulkan driver versions.
+    if (SUCCEEDED(hr) && pUMDVersion) {
+      pUMDVersion->HighPart = 0x00200000u;
+      pUMDVersion->LowPart  = 0xffffffffu;
+    }
 
     if (FAILED(hr)) {
       Logger::err("DXGI: CheckInterfaceSupport: Unsupported interface");
@@ -272,7 +275,8 @@ namespace dxvk {
     auto deviceProp = m_adapter->deviceProperties();
     auto memoryProp = m_adapter->memoryProperties();
     auto vk11       = m_adapter->devicePropertiesExt().vk11;
-    
+    auto vk12       = m_adapter->devicePropertiesExt().vk12;
+
     // Custom Vendor / Device ID
     if (options->customVendorId >= 0)
       deviceProp.vendorID = options->customVendorId;
@@ -283,13 +287,36 @@ namespace dxvk {
     std::string description = options->customDeviceDesc.empty()
       ? std::string(deviceProp.deviceName)
       : options->customDeviceDesc;
-    
-    // XXX nvapi workaround for a lot of Unreal Engine 4 games
-    if (options->customVendorId < 0 && options->customDeviceId < 0
-     && options->nvapiHack && deviceProp.vendorID == uint16_t(DxvkGpuVendor::Nvidia)) {
-      Logger::info("DXGI: NvAPI workaround enabled, reporting AMD GPU");
-      deviceProp.vendorID = uint16_t(DxvkGpuVendor::Amd);
-      deviceProp.deviceID = 0x67df; /* RX 480 */
+
+    if (options->customVendorId < 0) {
+      uint16_t fallbackVendor = 0xdead;
+      uint16_t fallbackDevice = 0xbeef;
+
+      if (!options->hideAmdGpu) {
+        // AMD RX 6700XT
+        fallbackVendor = uint16_t(DxvkGpuVendor::Amd);
+        fallbackDevice = 0x73df;
+      } else if (!options->hideNvidiaGpu) {
+        // Nvidia RTX 3060
+        fallbackVendor = uint16_t(DxvkGpuVendor::Nvidia);
+        fallbackDevice = 0x2487;
+      }
+
+      bool hideNvidiaGpu = vk12.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY
+        ? options->hideNvidiaGpu : options->hideNvkGpu;
+
+      bool hideGpu = (deviceProp.vendorID == uint16_t(DxvkGpuVendor::Nvidia) && hideNvidiaGpu)
+                  || (deviceProp.vendorID == uint16_t(DxvkGpuVendor::Amd) && options->hideAmdGpu)
+                  || (deviceProp.vendorID == uint16_t(DxvkGpuVendor::Intel) && options->hideIntelGpu);
+
+      if (hideGpu) {
+        deviceProp.vendorID = fallbackVendor;
+
+        if (options->customDeviceId < 0)
+          deviceProp.deviceID = fallbackDevice;
+
+        Logger::info(str::format("DXGI: Hiding actual GPU, reporting vendor ID 0x", std::hex, deviceProp.vendorID, ", device ID ", deviceProp.deviceID));
+      }
     }
     
     // Convert device name
@@ -299,38 +326,57 @@ namespace dxvk {
       sizeof(pDesc->Description) / sizeof(pDesc->Description[0]) - 1,
       description.c_str(), description.size());
     
-    // Get amount of video memory
-    // based on the Vulkan heaps
+    // Get amount of video memory based on the Vulkan heaps
     VkDeviceSize deviceMemory = 0;
     VkDeviceSize sharedMemory = 0;
     
     for (uint32_t i = 0; i < memoryProp.memoryHeapCount; i++) {
       VkMemoryHeap heap = memoryProp.memoryHeaps[i];
       
-      if (heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-        deviceMemory += heap.size;
-      else
+      if (heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+        // In general we'll have one large device-local heap, and an additional
+        // smaller heap on dGPUs in case ReBAR is not supported. Assume that
+        // the largest available heap is the total amount of available VRAM.
+        deviceMemory = std::max(heap.size, deviceMemory);
+      } else {
+        // This is typically plain sysmem, don't care too much about limits here
         sharedMemory += heap.size;
+      }
     }
 
-    // Some games think we are on Intel given a lack of
-    // NVAPI or AGS/atiadlxx support.
-    // Report our device memory as shared memory,
-    // and some small amount for the carveout.
-    if (options->emulateUMA && !m_adapter->isUnifiedMemoryArchitecture()) {
+    // This can happen on integrated GPUs with one memory heap, over-report
+    // here since some games may be allergic to reporting no shared memory.
+    if (!sharedMemory)
       sharedMemory = deviceMemory;
-      deviceMemory = 128 * (1 << 20);
+
+    // Some games will default to the GPU with the highest amount of dedicated memory,
+    // which can be an integrated GPU on some systems. Report available memory as shared
+    // memory and a small amount as dedicated carve-out if a dedicated GPU is present,
+    // otherwise report memory normally to not unnecessarily confuse games on Deck.
+    if ((m_adapter->isLinkedToDGPU() && deviceProp.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)) {
+      sharedMemory = std::max(sharedMemory, deviceMemory);
+      deviceMemory = 512ull << 20;
     }
-    
+
+    // Make sure to never return exact powers of two outside the 32-bit range
+    // because some games don't understand the concept of actually having VRAM
+    constexpr VkDeviceSize adjustment = 32ull << 20;
+
+    if (deviceMemory && !(deviceMemory & 0xffffffffull))
+      deviceMemory -= adjustment;
+
+    if (sharedMemory && !(sharedMemory & 0xffffffffull))
+      sharedMemory -= adjustment;
+
     // Some games are silly and need their memory limited
     if (options->maxDeviceMemory > 0
      && options->maxDeviceMemory < deviceMemory)
       deviceMemory = options->maxDeviceMemory;
-    
+
     if (options->maxSharedMemory > 0
      && options->maxSharedMemory < sharedMemory)
       sharedMemory = options->maxSharedMemory;
-    
+
     if (env::is32BitHostPlatform()) {
       // The value returned by DXGI is a 32-bit value
       // on 32-bit platforms, so we need to clamp it

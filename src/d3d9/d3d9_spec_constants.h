@@ -13,14 +13,14 @@ namespace dxvk {
   enum D3D9SpecConstantId : uint32_t {
     SpecSamplerType,        // 2 bits for 16 PS samplers      | Bits: 32
 
-    SpecSamplerDepthMode,   // 1 bit for 20 VS + PS samplers  | Bits: 20
+    SpecSamplerDepthMode,   // 1 bit for 21 VS + PS samplers  | Bits: 21
     SpecAlphaCompareOp,     // Range: 0 -> 7                  | Bits: 3
     SpecPointMode,          // Range: 0 -> 3                  | Bits: 2
     SpecVertexFogMode,      // Range: 0 -> 3                  | Bits: 2
     SpecPixelFogMode,       // Range: 0 -> 3                  | Bits: 2
     SpecFogEnabled,         // Range: 0 -> 1                  | Bits: 1
 
-    SpecSamplerNull,        // 1 bit for 20 samplers          | Bits: 20
+    SpecSamplerNull,        // 1 bit for 21 samplers          | Bits: 21
     SpecProjectionType,     // 1 bit for 6 PS 1.x samplers    | Bits: 6
     SpecAlphaPrecisionBits, // Range: 0 -> 8 or 0xF           | Bits: 4
 
@@ -29,6 +29,8 @@ namespace dxvk {
 
     SpecDrefClamp,          // 1 bit for 16 PS samplers       | Bits: 16
     SpecFetch4,             // 1 bit for 16 PS samplers       | Bits: 16
+
+    SpecClipPlaneCount,     // 3 bits for 6 clip planes       | Bits : 3
 
     SpecConstantCount,
   };
@@ -44,27 +46,32 @@ namespace dxvk {
   };
 
   struct D3D9SpecializationInfo {
-    static constexpr uint32_t MaxSpecDwords = 5;
+    static constexpr uint32_t MaxSpecDwords = 6;
+
+    static constexpr uint32_t MaxUBODwords  = 5;
+    static constexpr size_t UBOSize = MaxUBODwords * sizeof(uint32_t);
 
     static constexpr std::array<BitfieldPosition, SpecConstantCount> Layout{{
       { 0, 0, 32 },  // SamplerType
       
-      { 1, 0,  20 }, // SamplerDepthMode
-      { 1, 20, 3 },  // AlphaCompareOp
-      { 1, 23, 2 },  // PointMode
-      { 1, 25, 2 },  // VertexFogMode
-      { 1, 27, 2 },  // PixelFogMode
-      { 1, 29, 1 },  // FogEnabled
+      { 1, 0,  21 }, // SamplerDepthMode
+      { 1, 21, 3 },  // AlphaCompareOp
+      { 1, 24, 2 },  // PointMode
+      { 1, 26, 2 },  // VertexFogMode
+      { 1, 28, 2 },  // PixelFogMode
+      { 1, 30, 1 },  // FogEnabled
 
-      { 2, 0,  20 }, // SamplerNull
-      { 2, 20, 6 },  // ProjectionType
-      { 2, 26, 4 },  // AlphaPrecisionBits
+      { 2, 0,  21 }, // SamplerNull
+      { 2, 21, 6 },  // ProjectionType
+      { 2, 27, 4 },  // AlphaPrecisionBits
 
       { 3, 0,  16 }, // VertexShaderBools
       { 3, 16, 16 }, // PixelShaderBools
 
       { 4, 0,  16 }, // DrefClamp
       { 4, 16, 16 }, // Fetch4
+
+      { 5, 0, 3 },   // ClipPlaneCount
     }};
 
     template <D3D9SpecConstantId Id, typename T>
@@ -97,13 +104,13 @@ namespace dxvk {
       return get(module, specUbo, id, 0, 32);
     }
 
-    uint32_t get(SpirvModule &module, uint32_t specUbo, D3D9SpecConstantId id, uint32_t bitOffset, uint32_t bitCount) {
+    uint32_t get(SpirvModule &module, uint32_t specUbo, D3D9SpecConstantId id, uint32_t bitOffset, uint32_t bitCount, uint32_t uboOverride = 0) {
       const auto &layout = D3D9SpecializationInfo::Layout[id];
 
       uint32_t uintType = module.defIntType(32, 0);
       uint32_t optimized = getOptimizedBool(module);
 
-      uint32_t quickValue     = getSpecUBODword(module, specUbo, layout.dwordOffset);
+      uint32_t quickValue     = uboOverride ? uboOverride : getSpecUBODword(module, specUbo, layout.dwordOffset);
       uint32_t optimizedValue = getSpecConstDword(module, layout.dwordOffset);
 
       uint32_t val = module.opSelect(uintType, optimized, optimizedValue, quickValue);

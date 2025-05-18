@@ -6,6 +6,10 @@
 #ifdef __linux__
 #include <unistd.h>
 #include <limits.h>
+#elif defined(__FreeBSD__)
+#include <sys/sysctl.h>
+#include <unistd.h>
+#include <limits.h>
 #endif
 
 #include "util_env.h"
@@ -20,7 +24,9 @@ namespace dxvk::env {
     result.resize(MAX_PATH + 1);
 
     DWORD len = ::GetEnvironmentVariableW(str::tows(name).c_str(), result.data(), MAX_PATH);
-    result.resize(len);
+    if (!len || len >= MAX_PATH)
+      return "";
+    result.resize(len + 1);
 
     return str::fromws(result.data());
 #else
@@ -76,7 +82,9 @@ namespace dxvk::env {
     exePath.resize(MAX_PATH + 1);
 
     DWORD len = ::GetModuleFileNameW(NULL, exePath.data(), MAX_PATH);
-    exePath.resize(len);
+    if (!len || len == MAX_PATH)
+      return "";
+    exePath.resize(len + 1);
 
     return str::fromws(exePath.data());
 #elif defined(__linux__)
@@ -85,6 +93,17 @@ namespace dxvk::env {
     size_t count = readlink("/proc/self/exe", exePath.data(), exePath.size());
 
     return std::string(exePath.begin(), exePath.begin() + count);
+#elif defined(__FreeBSD__)
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, getpid()};
+    char exePath[PATH_MAX] = {};
+    size_t size = PATH_MAX;
+
+    if (sysctl(mib, 4, exePath, &size, NULL, 0) != 0) {
+        // throw error here?
+        return "";
+    }
+
+    return std::string(exePath);
 #endif
   }
   

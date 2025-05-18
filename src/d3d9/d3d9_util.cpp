@@ -142,22 +142,22 @@ namespace dxvk {
     switch (type) {
       default:
       case D3DPT_TRIANGLELIST:
-        return { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,  VK_FALSE, 0 };
+        return DxvkInputAssemblyState(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false);
 
       case D3DPT_POINTLIST:
-        return { VK_PRIMITIVE_TOPOLOGY_POINT_LIST,     VK_FALSE, 0 };
+        return DxvkInputAssemblyState(VK_PRIMITIVE_TOPOLOGY_POINT_LIST, false);
 
       case D3DPT_LINELIST:
-        return { VK_PRIMITIVE_TOPOLOGY_LINE_LIST,      VK_FALSE, 0 };
+        return DxvkInputAssemblyState(VK_PRIMITIVE_TOPOLOGY_LINE_LIST, false);
 
       case D3DPT_LINESTRIP:
-        return { VK_PRIMITIVE_TOPOLOGY_LINE_STRIP,     VK_FALSE, 0 };
+        return DxvkInputAssemblyState(VK_PRIMITIVE_TOPOLOGY_LINE_STRIP, false);
 
       case D3DPT_TRIANGLESTRIP:
-        return { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, VK_FALSE, 0 };
+        return DxvkInputAssemblyState(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, false);
 
       case D3DPT_TRIANGLEFAN:
-        return { VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN,   VK_FALSE, 0 };
+        return DxvkInputAssemblyState(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, false);
     }
   }
 
@@ -194,55 +194,6 @@ namespace dxvk {
       case D3DBLENDOP_REVSUBTRACT:  return VK_BLEND_OP_REVERSE_SUBTRACT;
       case D3DBLENDOP_MIN:          return VK_BLEND_OP_MIN;
       case D3DBLENDOP_MAX:          return VK_BLEND_OP_MAX;
-    }
-  }
-
-
-  VkFilter DecodeFilter(D3DTEXTUREFILTERTYPE Filter) {
-    switch (Filter) {
-    case D3DTEXF_NONE:
-    case D3DTEXF_POINT:
-      return VK_FILTER_NEAREST;
-    default:
-      return VK_FILTER_LINEAR;
-    }
-  }
-
-
-  D3D9MipFilter DecodeMipFilter(D3DTEXTUREFILTERTYPE Filter) {
-    D3D9MipFilter filter;
-    filter.MipsEnabled = Filter != D3DTEXF_NONE;
-
-    switch (Filter) {
-    case D3DTEXF_POINT:
-    case D3DTEXF_NONE:
-      filter.MipFilter = VK_SAMPLER_MIPMAP_MODE_NEAREST; break;
-    default:
-      filter.MipFilter = VK_SAMPLER_MIPMAP_MODE_LINEAR; break;
-    }
-
-    return filter;
-  }
-
-
-  bool IsAnisotropic(D3DTEXTUREFILTERTYPE Filter) {
-    return Filter == D3DTEXF_ANISOTROPIC;
-  }
-
-
-  VkSamplerAddressMode DecodeAddressMode(D3DTEXTUREADDRESS Mode) {
-    switch (Mode) {
-      default:
-      case D3DTADDRESS_WRAP:
-        return VK_SAMPLER_ADDRESS_MODE_REPEAT;
-      case D3DTADDRESS_MIRROR:
-        return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
-      case D3DTADDRESS_CLAMP:
-        return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-      case D3DTADDRESS_BORDER:
-        return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-      case D3DTADDRESS_MIRRORONCE:
-        return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
     }
   }
 
@@ -418,6 +369,17 @@ namespace dxvk {
         || Format == D3D9Format::DF16
         || Format == D3D9Format::DF24
         || Format == D3D9Format::INTZ;
+  }
+
+  bool IsDepthStencilFormat(D3D9Format Format) {
+    return IsDepthFormat(Format) || Format == D3D9Format::S8_LOCKABLE;
+  }
+
+  bool IsLockableDepthStencilFormat(D3D9Format Format) {
+    return Format == D3D9Format::S8_LOCKABLE
+        || Format == D3D9Format::D16_LOCKABLE
+        || Format == D3D9Format::D32_LOCKABLE
+        || Format == D3D9Format::D32F_LOCKABLE;
   }
 
 }

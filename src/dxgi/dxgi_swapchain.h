@@ -31,7 +31,8 @@ namespace dxvk {
             IDXGIVkSwapChain*           pPresenter,
             HWND                        hWnd,
       const DXGI_SWAP_CHAIN_DESC1*      pDesc,
-      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc);
+      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc,
+            IUnknown*                   pDevice);
     
     ~DxgiSwapChain();
     
@@ -184,14 +185,27 @@ namespace dxvk {
     DXGI_SWAP_CHAIN_DESC1           m_desc;
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC m_descFs;
     UINT                            m_presentId;
+    bool                            m_ModeChangeInProgress = false;
 
     Com<IDXGIVkSwapChain>           m_presenter;
     Com<IDXGIVkSwapChain1>          m_presenter1;
+    Com<IDXGIVkSwapChain2>          m_presenter2;
     
     HMONITOR                        m_monitor;
     bool                            m_monitorHasOutput = true;
     bool                            m_frameStatisticsDisjoint = true;
     wsi::DxvkWindowState            m_windowState;
+
+    double                          m_frameRateOption = 0.0;
+    double                          m_frameRateRefresh = 0.0;
+    double                          m_frameRateLimit = 0.0;
+    uint32_t                        m_frameRateSyncInterval = 0u;
+    bool                            m_is_d3d12;
+
+    DXGI_COLOR_SPACE_TYPE           m_colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+
+    uint32_t                        m_globalHDRStateSerial = 0;
+    bool                            m_hasLatencyControl = false;
     
     HRESULT EnterFullscreenMode(
             IDXGIOutput1            *pTarget);
@@ -219,6 +233,23 @@ namespace dxvk {
     
     void ReleaseMonitorData();
 
+    void UpdateGlobalHDRState();
+
+    bool ValidateColorSpaceSupport(
+            DXGI_FORMAT             Format,
+            DXGI_COLOR_SPACE_TYPE   ColorSpace);
+
+    HRESULT UpdateColorSpace(
+            DXGI_FORMAT             Format,
+            DXGI_COLOR_SPACE_TYPE   ColorSpace);
+
+    void UpdateTargetFrameRate(
+            UINT                    SyncInterval);
+
+    HRESULT STDMETHODCALLTYPE PresentBase(
+            UINT                      SyncInterval,
+            UINT                      PresentFlags,
+      const DXGI_PRESENT_PARAMETERS*  pPresentParameters);
   };
   
 }

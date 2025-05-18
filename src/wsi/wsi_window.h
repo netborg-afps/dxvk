@@ -3,11 +3,34 @@
 #include <windows.h>
 
 #include "wsi_monitor.h"
-#include "wsi_platform.h"
 
 #include "../vulkan/vulkan_loader.h"
 
 namespace dxvk::wsi {
+
+  /**
+    * \brief Impl-dependent state
+    */
+  struct DxvkWindowState {
+#if defined(DXVK_WSI_WIN32)
+    struct {
+      LONG style   = 0;
+      LONG exstyle = 0;
+      RECT rect    = { 0, 0, 0, 0 };
+    } win;
+#endif
+#if defined(DXVK_WSI_SDL3)
+    struct {
+      WsiMode fullscreenMode = { };
+    } sdl3;
+#endif
+#if defined(DXVK_WSI_SDL2)
+    // Nothing to store
+#endif
+#if defined(DXVK_WSI_GLFW)
+    // Nothing to store
+#endif
+  };
 
   /**
     * \brief The size of the window
@@ -40,12 +63,14 @@ namespace dxvk::wsi {
     * 
     * \param [in] hMonitor The monitor
     * \param [in] hWindow The window (may be unused on some platforms)
+    * \param [in] pState The swapchain's window state
     * \param [in] mode The mode
     * \returns \c true on success, \c false on failure
     */
   bool setWindowMode(
           HMONITOR         hMonitor,
           HWND             hWindow,
+          DxvkWindowState* pState,
     const WsiMode&         mode);
 
   /**
@@ -98,6 +123,22 @@ namespace dxvk::wsi {
     * \returns Is it a window?
     */
   bool isWindow(HWND hWindow);
+
+  /**
+    * \brief Is window minimized?
+    *
+    * \param [in] hWindow The window
+    * \returns Is window minimized?
+    */
+  bool isMinimized(HWND hWindow);
+
+  /**
+    * \brief Is window occluded?
+    *
+    * \param [in] hWindow The window
+    * \returns Is window occluded?
+    */
+  bool isOccluded(HWND hWindow);
 
   /**
     * \brief Update a fullscreen window's position/size

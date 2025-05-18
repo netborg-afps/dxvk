@@ -15,6 +15,7 @@ namespace dxvk {
   D3D9FixedFunctionOptions::D3D9FixedFunctionOptions(const D3D9Options* options) {
     invariantPosition = options->invariantPosition;
     forceSampleRateShading = options->forceSampleRateShading;
+    drefScaling = options->drefScaling;
   }
 
   uint32_t DoFixedFunctionFog(D3D9ShaderSpecConstantManager& spec, SpirvModule& spvModule, const D3D9FogContext& fogCtx) {
@@ -301,7 +302,7 @@ namespace dxvk {
           case VK_COMPARE_OP_EQUAL:            return spvModule.opFOrdEqual           (boolType, alphaId, alphaRefId);
           case VK_COMPARE_OP_LESS_OR_EQUAL:    return spvModule.opFOrdLessThanEqual   (boolType, alphaId, alphaRefId);
           case VK_COMPARE_OP_GREATER:          return spvModule.opFOrdGreaterThan     (boolType, alphaId, alphaRefId);
-          case VK_COMPARE_OP_NOT_EQUAL:        return spvModule.opFOrdNotEqual        (boolType, alphaId, alphaRefId);
+          case VK_COMPARE_OP_NOT_EQUAL:        return spvModule.opFUnordNotEqual      (boolType, alphaId, alphaRefId);
           case VK_COMPARE_OP_GREATER_OR_EQUAL: return spvModule.opFOrdGreaterThanEqual(boolType, alphaId, alphaRefId);
           default:
           case VK_COMPARE_OP_ALWAYS:           return spvModule.constBool(true);
@@ -336,7 +337,7 @@ namespace dxvk {
   }
 
 
-  uint32_t SetupRenderStateBlock(SpirvModule& spvModule, uint32_t count) {
+  uint32_t SetupRenderStateBlock(SpirvModule& spvModule) {
     uint32_t floatType = spvModule.defFloatType(32);
     uint32_t uintType  = spvModule.defIntType(32, 0);
     uint32_t vec3Type  = spvModule.defVectorType(floatType, 3);
@@ -357,7 +358,7 @@ namespace dxvk {
       floatType,
     }};
 
-    uint32_t rsStruct = spvModule.defStructTypeUnique(count, rsMembers.data());
+    uint32_t rsStruct = spvModule.defStructTypeUnique(rsMembers.size(), rsMembers.data());
     uint32_t rsBlock = spvModule.newVar(
       spvModule.defPointerType(rsStruct, spv::StorageClassPushConstant),
       spv::StorageClassPushConstant);
@@ -369,9 +370,6 @@ namespace dxvk {
 
     uint32_t memberIdx = 0;
     auto SetMemberName = [&](const char* name, uint32_t offset) {
-      if (memberIdx >= count)
-        return;
-
       spvModule.setDebugMemberName   (rsStruct, memberIdx, name);
       spvModule.memberDecorateOffset (rsStruct, memberIdx, offset);
       memberIdx++;
@@ -788,11 +786,9 @@ namespace dxvk {
     std::vector
       <DxvkBindingInfo>   m_bindings;
 
-    uint32_t              m_inputMask = 0u;
-    uint32_t              m_outputMask = 0u;
+    uint32_t              m_inputMask       = 0u;
+    uint32_t              m_outputMask      = 0u;
     uint32_t              m_flatShadingMask = 0u;
-    uint32_t              m_pushConstOffset = 0u;
-    uint32_t              m_pushConstSize = 0u;
 
     DxsoProgramType       m_programType;
     D3D9FFShaderKeyVS     m_vsKey;
@@ -804,20 +800,20 @@ namespace dxvk {
     DxsoIsgn              m_isgn;
     DxsoIsgn              m_osgn;
 
-    uint32_t              m_boolType;
-    uint32_t              m_floatType;
-    uint32_t              m_uint32Type;
-    uint32_t              m_vec4Type;
-    uint32_t              m_vec3Type;
-    uint32_t              m_vec2Type;
-    uint32_t              m_mat3Type;
-    uint32_t              m_mat4Type;
+    uint32_t              m_boolType        = 0u;
+    uint32_t              m_floatType       = 0u;
+    uint32_t              m_uint32Type      = 0u;
+    uint32_t              m_vec4Type        = 0u;
+    uint32_t              m_vec3Type        = 0u;
+    uint32_t              m_vec2Type        = 0u;
+    uint32_t              m_mat3Type        = 0u;
+    uint32_t              m_mat4Type        = 0u;
 
-    uint32_t              m_entryPointId;
+    uint32_t              m_entryPointId    = 0u;
 
-    uint32_t              m_rsBlock;
-    uint32_t              m_specUbo;
-    uint32_t              m_mainFuncLabel;
+    uint32_t              m_rsBlock         = 0u;
+    uint32_t              m_specUbo         = 0u;
+    uint32_t              m_mainFuncLabel   = 0u;
 
     D3D9FixedFunctionOptions m_options;
 
@@ -829,11 +825,11 @@ namespace dxvk {
     const D3D9FFShaderKeyVS&       Key,
     const std::string&             Name,
           D3D9FixedFunctionOptions Options)
-  : m_module(spvVersion(1, 3)), m_options(Options) {
-    m_programType = DxsoProgramTypes::VertexShader;
-    m_vsKey    = Key;
-    m_filename = Name;
-  }
+  : m_filename    ( Name )
+  , m_module      ( spvVersion(1, 3) )
+  , m_programType ( DxsoProgramTypes::VertexShader )
+  , m_vsKey       ( Key )
+  , m_options     ( Options ) { }
 
 
   D3D9FFShaderCompiler::D3D9FFShaderCompiler(
@@ -841,11 +837,11 @@ namespace dxvk {
     const D3D9FFShaderKeyFS&       Key,
     const std::string&             Name,
           D3D9FixedFunctionOptions Options)
-  : m_module(spvVersion(1, 3)), m_options(Options) {
-    m_programType = DxsoProgramTypes::PixelShader;
-    m_fsKey    = Key;
-    m_filename = Name;
-  }
+  : m_filename    ( Name )
+  , m_module      ( spvVersion(1, 3) )
+  , m_programType ( DxsoProgramTypes::PixelShader )
+  , m_fsKey       ( Key )
+  , m_options     ( Options ) { }
 
 
   Rc<DxvkShader> D3D9FFShaderCompiler::compile() {
@@ -904,8 +900,8 @@ namespace dxvk {
     info.inputMask = m_inputMask;
     info.outputMask = m_outputMask;
     info.flatShadingInputs = m_flatShadingMask;
-    info.pushConstOffset = m_pushConstOffset;
-    info.pushConstSize = m_pushConstSize;
+    info.pushConstStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    info.pushConstSize = sizeof(D3D9RenderStateInfo);
 
     return new DxvkShader(info, m_module.compile());
   }
@@ -1624,7 +1620,7 @@ namespace dxvk {
         uint32_t atten  = m_module.opFFma  (m_floatType, d, atten2, atten1);
                  atten  = m_module.opFFma  (m_floatType, d, atten,  atten0);
                  atten  = m_module.opFDiv  (m_floatType, m_module.constf32(1.0f), atten);
-                 atten  = m_module.opNMin  (m_floatType, atten, m_module.constf32(FLT_MAX));
+                 atten  = m_module.opNMin  (m_floatType, atten, m_module.constf32(std::numeric_limits<float>::max()));
 
                  atten  = m_module.opSelect(m_floatType, m_module.opFOrdGreaterThan(bool_t, d, range), m_module.constf32(0.0f), atten);
                  atten  = m_module.opSelect(m_floatType, isDirectional, m_module.constf32(1.0f), atten);
@@ -1665,6 +1661,8 @@ namespace dxvk {
         uint32_t midDot = m_module.opDot(m_floatType, normal, mid);
                  midDot = m_module.opFClamp(m_floatType, midDot, m_module.constf32(0.0f), m_module.constf32(1.0f));
         uint32_t doSpec = m_module.opFOrdGreaterThan(bool_t, midDot, m_module.constf32(0.0f));
+                 doSpec = m_module.opLogicalAnd(bool_t, doSpec, m_module.opFOrdGreaterThan(bool_t, hitDot, m_module.constf32(0.0f)));
+
         uint32_t specularness = m_module.opPow(m_floatType, midDot, m_vs.constants.materialPower);
                  specularness = m_module.opFMul(m_floatType, specularness, atten);
                  specularness = m_module.opSelect(m_floatType, doSpec, specularness, m_module.constf32(0.0f));
@@ -1734,20 +1732,7 @@ namespace dxvk {
 
 
   void D3D9FFShaderCompiler::setupRenderStateInfo() {
-    uint32_t count;
-
-    if (m_programType == DxsoProgramType::PixelShader) {
-      m_pushConstOffset = 0;
-      m_pushConstSize   = offsetof(D3D9RenderStateInfo, pointSize);
-      count = 5;
-    }
-    else {
-      m_pushConstOffset = offsetof(D3D9RenderStateInfo, pointSize);
-      m_pushConstSize   = sizeof(float) * 6;
-      count = 11;
-    }
-
-    m_rsBlock = SetupRenderStateBlock(m_module, count);
+    m_rsBlock = SetupRenderStateBlock(m_module);
   }
 
 
@@ -2163,6 +2148,11 @@ namespace dxvk {
         return coords;
       };
 
+      auto ScalarReplicate = [&](uint32_t reg) {
+        std::array<uint32_t, 4> replicant = { reg, reg, reg, reg };
+        return m_module.opCompositeConstruct(m_vec4Type, replicant.size(), replicant.data());
+      };
+
       auto GetTexture = [&]() {
         if (!processedTexture) {
           SpirvImageOperands imageOperands;
@@ -2182,20 +2172,16 @@ namespace dxvk {
           texcoord = m_module.opVectorShuffle(texcoord_t,
             texcoord, texcoord, texcoordCnt, indices.data());
 
-          uint32_t projIdx = m_fsKey.Stages[i].Contents.ProjectedCount;
-          if (projIdx == 0 || projIdx > texcoordCnt)
-            projIdx = texcoordCnt;
-          --projIdx;
-
+          bool shouldProject = m_fsKey.Stages[i].Contents.Projected;
           uint32_t projValue = 0;
 
-          if (m_fsKey.Stages[i].Contents.Projected) {
+          if (shouldProject) {
+            // Always use w, the vertex shader puts the correct value there.
+            const uint32_t projIdx = 3;
             projValue = m_module.opCompositeExtract(m_floatType, m_ps.in.TEXCOORD[i], 1, &projIdx);
             uint32_t insertIdx = texcoordCnt - 1;
             texcoord = m_module.opCompositeInsert(texcoord_t, projValue, texcoord, 1, &insertIdx);
           }
-
-          bool shouldProject = m_fsKey.Stages[i].Contents.Projected;
 
           if (i != 0 && (
             m_fsKey.Stages[i - 1].Contents.ColorOp == D3DTOP_BUMPENVMAP ||
@@ -2210,10 +2196,23 @@ namespace dxvk {
             shouldProject = false;
           }
 
-          if (shouldProject)
+          if (unlikely(stage.SampleDref)) {
+            uint32_t component = 2;
+            uint32_t reference = m_module.opCompositeExtract(m_floatType, texcoord, 1, &component);
+
+            // [D3D8] Scale Dref to [0..(2^N - 1)] for D24S8 and D16 if Dref scaling is enabled
+            if (m_options.drefScaling) {
+              uint32_t maxDref = m_module.constf32(1.0f / (float(1 << m_options.drefScaling) - 1.0f));
+              reference        = m_module.opFMul(m_floatType, reference, maxDref);
+            }
+
+            texture = m_module.opImageSampleDrefImplicitLod(m_floatType, imageVarId, texcoord, reference, imageOperands);
+            texture = ScalarReplicate(texture);
+          } else if (shouldProject) {
             texture = m_module.opImageSampleProjImplicitLod(m_vec4Type, imageVarId, texcoord, imageOperands);
-          else
+          } else {
             texture = m_module.opImageSampleImplicitLod(m_vec4Type, imageVarId, texcoord, imageOperands);
+          }
 
           if (i != 0 && m_fsKey.Stages[i - 1].Contents.ColorOp == D3DTOP_BUMPENVMAPLUMINANCE) {
             uint32_t index = m_module.constu32(D3D9SharedPSStages_Count * (i - 1) + D3D9SharedPSStages_BumpEnvLScale);
@@ -2239,11 +2238,6 @@ namespace dxvk {
         processedTexture = true;
 
         return texture;
-      };
-
-      auto ScalarReplicate = [&](uint32_t reg) {
-        std::array<uint32_t, 4> replicant = { reg, reg, reg, reg };
-        return m_module.opCompositeConstruct(m_vec4Type, replicant.size(), replicant.data());
       };
 
       auto AlphaReplicate = [&](uint32_t reg) {
@@ -2642,6 +2636,11 @@ namespace dxvk {
           dimensionality = spv::Dim2D;
           sampler.texcoordCnt = 2;
           viewType       = VK_IMAGE_VIEW_TYPE_2D;
+
+          // Z coordinate for Dref sampling
+          if (m_fsKey.Stages[i].Contents.SampleDref)
+            sampler.texcoordCnt++;
+
           break;
         case D3DRTYPE_CUBETEXTURE:
           dimensionality = spv::DimCube;
@@ -2714,7 +2713,8 @@ namespace dxvk {
     
     uint32_t floatType = m_module.defFloatType(32);
     uint32_t vec4Type  = m_module.defVectorType(floatType, 4);
-    
+    uint32_t boolType  = m_module.defBoolType();
+
     // Declare uniform buffer containing clip planes
     uint32_t clipPlaneArray  = m_module.defArrayTypeUnique(vec4Type, clipPlaneCountId);
     uint32_t clipPlaneStruct = m_module.defStructTypeUnique(1, &clipPlaneArray);
@@ -2754,6 +2754,9 @@ namespace dxvk {
 
     m_module.decorateBuiltIn(clipDistArray, spv::BuiltInClipDistance);
 
+    // Always consider clip planes enabled when doing GPL by forcing 6 for the quick value.
+    uint32_t clipPlaneCount = m_spec.get(m_module, m_specUbo, SpecClipPlaneCount, 0, 32, m_module.constu32(caps::MaxClipPlanes));
+
     // Compute clip distances
     for (uint32_t i = 0; i < caps::MaxClipPlanes; i++) {
       std::array<uint32_t, 2> blockMembers = {{
@@ -2767,12 +2770,14 @@ namespace dxvk {
           clipPlaneBlock, blockMembers.size(), blockMembers.data()));
       
       uint32_t distId = m_module.opDot(floatType, worldPos, planeId);
-      
-      m_module.opStore(
-        m_module.opAccessChain(
-          m_module.defPointerType(floatType, spv::StorageClassOutput),
-          clipDistArray, 1, &blockMembers[1]),
-        distId);
+
+      uint32_t clipPlaneEnabled = m_module.opULessThan(boolType, m_module.constu32(i), clipPlaneCount);
+
+      uint32_t value = m_module.opSelect(floatType, clipPlaneEnabled, distId, m_module.constf32(0.0f));
+
+      m_module.opStore(m_module.opAccessChain(
+        m_module.defPointerType(floatType, spv::StorageClassOutput),
+        clipDistArray, 1, &blockMembers[1]), value);
     }
   }
 

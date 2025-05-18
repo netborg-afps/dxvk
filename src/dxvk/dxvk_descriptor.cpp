@@ -35,9 +35,8 @@ namespace dxvk {
 
   DxvkDescriptorPool::DxvkDescriptorPool(
           DxvkDevice*               device,
-          DxvkDescriptorManager*    manager,
-          DxvkContextType           contextType)
-  : m_device(device), m_manager(manager), m_contextType(contextType),
+          DxvkDescriptorManager*    manager)
+  : m_device(device), m_manager(manager),
     m_cachedEntry(nullptr, nullptr) {
 
   }
@@ -49,12 +48,10 @@ namespace dxvk {
     for (auto pool : m_descriptorPools)
       vk->vkDestroyDescriptorPool(vk->device(), pool, nullptr);
 
-    if (m_contextType == DxvkContextType::Primary) {
-      m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount,
-        uint64_t(-int64_t(m_descriptorPools.size())));
-      m_device->addStatCtr(DxvkStatCounter::DescriptorSetCount,
-        uint64_t(-int64_t(m_setsAllocated)));
-    }
+    m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount,
+      uint64_t(-int64_t(m_descriptorPools.size())));
+    m_device->addStatCtr(DxvkStatCounter::DescriptorSetCount,
+      uint64_t(-int64_t(m_setsAllocated)));
   }
 
 
@@ -63,16 +60,19 @@ namespace dxvk {
     if (!m_setsAllocated)
       return false;
 
-    // No frame tracking for supplementary contexts, so
-    // always submit those at the end of a command list
-    if (endFrame || m_contextType != DxvkContextType::Primary)
+    // Submit at the end of each frame to make it more likely
+    // to get similar descriptor set layouts the next time the
+    // pool gets used.
+    if (endFrame)
       return true;
 
     // Submit very large descriptor pools to prevent extreme
     // memory bloat. This may be necessary for off-screen
     // rendering applications, or in situations where games
     // pre-render a lot of images without presenting in between.
-    return m_descriptorPools.size() >= 8;
+    return m_device->features().nvDescriptorPoolOverallocation.descriptorPoolOverallocation ?
+      m_setsAllocated > MaxDesiredPoolCount * m_manager->getMaxSetCount() :
+      m_descriptorPools.size() > MaxDesiredPoolCount;
   }
 
 
@@ -100,29 +100,25 @@ namespace dxvk {
 
 
   void DxvkDescriptorPool::reset() {
-    // As a heuristic to save memory, check how many descriptors
-    // have actively been used in the past couple of submissions.
-    bool isLowUsageFrame = false;
-
+    // As a heuristic to save memory, check how many descriptor
+    // sets were actually being used in past submissions.
     size_t poolCount = m_descriptorPools.size();
+    bool needsReset = poolCount > MaxDesiredPoolCount;
 
     if (poolCount > 1 || m_setsAllocated > m_manager->getMaxSetCount() / 2) {
       double factor = std::max(11.0 / 3.0 - double(poolCount) / 3.0, 1.0);
-      isLowUsageFrame = double(m_setsUsed) * factor < double(m_setsAllocated);
+      needsReset = double(m_setsUsed) * factor < double(m_setsAllocated);
     }
 
-    m_lowUsageFrames = isLowUsageFrame
-      ? m_lowUsageFrames + 1
-      : 0;
     m_setsUsed = 0;
 
-    if (m_lowUsageFrames < 16) {
+    if (!needsReset) {
       for (auto& entry : m_setLists)
         entry.second.reset();
     } else {
-      // If most sets are no longer being used, reset and destroy
-      // descriptor pools and reset all lookup tables in order to
-      // accomodate more descriptors of different layouts.
+      // If most sets are no longer needed, reset and destroy
+      // descriptor pools and reset all lookup tables in order
+      // to accomodate more descriptors of different layouts.
       for (auto pool : m_descriptorPools)
         m_manager->recycleVulkanDescriptorPool(pool);
 
@@ -131,7 +127,6 @@ namespace dxvk {
       m_setMaps.clear();
 
       m_setsAllocated = 0;
-      m_lowUsageFrames = 0;
     }
 
     m_cachedEntry = { nullptr, nullptr };
@@ -139,10 +134,8 @@ namespace dxvk {
 
 
   void DxvkDescriptorPool::updateStats(DxvkStatCounters& counters) {
-    if (m_contextType == DxvkContextType::Primary) {
-      counters.addCtr(DxvkStatCounter::DescriptorSetCount,
-        uint64_t(int64_t(m_setsAllocated) - int64_t(m_prevSetsAllocated)));
-    }
+    counters.addCtr(DxvkStatCounter::DescriptorSetCount,
+      uint64_t(int64_t(m_setsAllocated) - int64_t(m_prevSetsAllocated)));
 
     m_prevSetsAllocated = m_setsAllocated;
   }
@@ -241,15 +234,12 @@ namespace dxvk {
 
   
   DxvkDescriptorManager::DxvkDescriptorManager(
-          DxvkDevice*                 device,
-          DxvkContextType             contextType)
-  : m_device(device), m_contextType(contextType) {
+          DxvkDevice*                 device)
+  : m_device(device) {
     // Deliberately pick a very high number of descriptor sets so that
     // we will typically end up using all available pool memory before
     // the descriptor set limit becomes the limiting factor.
-    m_maxSets = m_contextType == DxvkContextType::Primary
-      ? (env::is32BitHostPlatform() ? 24576u : 49152u)
-      : (512u);
+    m_maxSets = env::is32BitHostPlatform() ? 24576u : 49152u;
   }
 
 
@@ -259,10 +249,8 @@ namespace dxvk {
     for (size_t i = 0; i < m_vkPoolCount; i++)
       vk->vkDestroyDescriptorPool(vk->device(), m_vkPools[i], nullptr);
 
-    if (m_contextType == DxvkContextType::Primary) {
-      m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount,
-        uint64_t(-int64_t(m_vkPoolCount)));
-    }
+    m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount,
+      uint64_t(-int64_t(m_vkPoolCount)));
   }
 
 
@@ -270,7 +258,7 @@ namespace dxvk {
     Rc<DxvkDescriptorPool> pool = m_pools.retrieveObject();
 
     if (pool == nullptr)
-      pool = new DxvkDescriptorPool(m_device, this, m_contextType);
+      pool = new DxvkDescriptorPool(m_device, this);
 
     return pool;
   }
@@ -311,14 +299,18 @@ namespace dxvk {
     info.maxSets       = m_maxSets;
     info.poolSizeCount = pools.size();
     info.pPoolSizes    = pools.data();
-    
+
+    if (m_device->features().nvDescriptorPoolOverallocation.descriptorPoolOverallocation) {
+      info.flags |= VK_DESCRIPTOR_POOL_CREATE_ALLOW_OVERALLOCATION_POOLS_BIT_NV
+                 |  VK_DESCRIPTOR_POOL_CREATE_ALLOW_OVERALLOCATION_SETS_BIT_NV;
+    }
+
     VkDescriptorPool pool = VK_NULL_HANDLE;
 
     if (vk->vkCreateDescriptorPool(vk->device(), &info, nullptr, &pool) != VK_SUCCESS)
       throw DxvkError("DxvkDescriptorPool: Failed to create descriptor pool");
 
-    if (m_contextType == DxvkContextType::Primary)
-      m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount, 1);
+    m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount, 1);
     return pool;
   }
 
@@ -335,9 +327,7 @@ namespace dxvk {
       }
     }
 
-    if (m_contextType == DxvkContextType::Primary)
-      m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount, uint64_t(-1ll));
-
+    m_device->addStatCtr(DxvkStatCounter::DescriptorPoolCount, uint64_t(-1ll));
     vk->vkDestroyDescriptorPool(vk->device(), pool, nullptr);
   }
 

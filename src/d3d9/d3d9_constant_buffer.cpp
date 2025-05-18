@@ -13,7 +13,7 @@ namespace dxvk {
           DxsoProgramType       ShaderStage,
           DxsoConstantBuffers   BufferType,
           VkDeviceSize          Size)
-  : D3D9ConstantBuffer(pDevice, getBufferUsage(pDevice, ShaderStage, BufferType), GetShaderStage(ShaderStage),
+  : D3D9ConstantBuffer(pDevice, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, GetShaderStage(ShaderStage),
       computeResourceSlotId(ShaderStage, DxsoBindingType::ConstantBuffer, BufferType),
       Size) {
 
@@ -42,22 +42,20 @@ namespace dxvk {
 
 
   void* D3D9ConstantBuffer::Alloc(VkDeviceSize size) {
-    if (unlikely(m_buffer == nullptr)) {
-      this->createBuffer();
-      m_slice = m_buffer->getSliceHandle();
-    }
+    if (unlikely(m_buffer == nullptr))
+      m_slice = this->createBuffer();
 
     size = align(size, m_align);
 
     if (unlikely(m_offset + size > m_size)) {
-      m_slice = m_buffer->allocSlice();
+      m_slice = m_buffer->allocateStorage();
       m_offset = 0;
 
       m_device->EmitCs([
         cBuffer = m_buffer,
         cSlice  = m_slice
-      ] (DxvkContext* ctx) {
-        ctx->invalidateBuffer(cBuffer, cSlice);
+      ] (DxvkContext* ctx) mutable {
+        ctx->invalidateBuffer(cBuffer, std::move(cSlice));
       });
     }
 
@@ -70,7 +68,7 @@ namespace dxvk {
       ctx->bindUniformBufferRange(cStages, cBinding, cOffset, cLength);
     });
 
-    void* mapPtr = reinterpret_cast<char*>(m_slice.mapPtr) + m_offset;
+    void* mapPtr = reinterpret_cast<char*>(m_slice->mapPtr()) + m_offset;
     m_offset += size;
     return mapPtr;
   }
@@ -78,22 +76,22 @@ namespace dxvk {
 
   void* D3D9ConstantBuffer::AllocSlice() {
     if (unlikely(m_buffer == nullptr))
-      this->createBuffer();
-
-    m_slice = m_buffer->allocSlice();
+      m_slice = this->createBuffer();
+    else
+      m_slice = m_buffer->allocateStorage();
 
     m_device->EmitCs([
       cBuffer = m_buffer,
       cSlice  = m_slice
-    ] (DxvkContext* ctx) {
-      ctx->invalidateBuffer(cBuffer, cSlice);
+    ] (DxvkContext* ctx) mutable {
+      ctx->invalidateBuffer(cBuffer, std::move(cSlice));
     });
 
-    return m_slice.mapPtr;
+    return m_slice->mapPtr();
   }
 
 
-  void D3D9ConstantBuffer::createBuffer() {
+  Rc<DxvkResourceAllocation> D3D9ConstantBuffer::createBuffer() {
     auto options = m_device->GetOptions();
 
     // Buffer usage and access flags don't make much of a difference
@@ -103,6 +101,7 @@ namespace dxvk {
     bufferInfo.usage  = m_usage;
     bufferInfo.access = 0;
     bufferInfo.stages = util::pipelineStages(m_stages);
+    bufferInfo.debugName = "Constant buffer";
 
     if (m_usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
       bufferInfo.access |= VK_ACCESS_UNIFORM_READ_BIT;
@@ -125,6 +124,8 @@ namespace dxvk {
     ] (DxvkContext* ctx) mutable {
       ctx->bindUniformBuffer(cStages, cBinding, std::move(cSlice));
     });
+
+    return m_buffer->storage();
   }
 
 
@@ -133,23 +134,6 @@ namespace dxvk {
       device->properties().core.properties.limits.minUniformBufferOffsetAlignment,
       device->properties().core.properties.limits.minStorageBufferOffsetAlignment),
       device->properties().extRobustness2.robustUniformBufferAccessSizeAlignment);
-  }
-
-
-  VkBufferUsageFlags D3D9ConstantBuffer::getBufferUsage(
-          D3D9DeviceEx*         pDevice,
-          DxsoProgramType       ShaderStage,
-          DxsoConstantBuffers   BufferType) {
-    VkBufferUsageFlags result = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-
-    // We won't always need this, but the only buffer that
-    // this applies to is so large that it will not matter.
-    if (pDevice->CanSWVP()
-     && ShaderStage == DxsoProgramType::VertexShader
-     && BufferType == DxsoConstantBuffers::VSConstantBuffer)
-      result |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-
-    return result;
   }
 
 }

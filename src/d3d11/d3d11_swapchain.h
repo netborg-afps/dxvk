@@ -4,6 +4,7 @@
 
 #include "../dxvk/hud/dxvk_hud.h"
 
+#include "../dxvk/dxvk_latency.h"
 #include "../dxvk/dxvk_swapchain_blitter.h"
 
 #include "../util/sync/sync_signal.h"
@@ -13,7 +14,7 @@ namespace dxvk {
   class D3D11Device;
   class D3D11DXGIDevice;
 
-  class D3D11SwapChain : public ComObject<IDXGIVkSwapChain1> {
+  class D3D11SwapChain : public ComObject<IDXGIVkSwapChain2> {
     constexpr static uint32_t DefaultFrameLatency = 1;
   public:
 
@@ -86,6 +87,9 @@ namespace dxvk {
     void STDMETHODCALLTYPE GetFrameStatistics(
             DXGI_VK_FRAME_STATISTICS* pFrameStatistics);
 
+    void STDMETHODCALLTYPE SetTargetFrameRate(
+            double                    FrameRate);
+
   private:
 
     enum BindingIds : uint32_t {
@@ -101,78 +105,54 @@ namespace dxvk {
     DXGI_SWAP_CHAIN_DESC1     m_desc;
 
     Rc<DxvkDevice>            m_device;
-    Rc<DxvkContext>           m_context;
-
     Rc<Presenter>             m_presenter;
 
-    Rc<DxvkImage>             m_swapImage;
-    Rc<DxvkImageView>         m_swapImageView;
     Rc<DxvkSwapchainBlitter>  m_blitter;
+    Rc<DxvkLatencyTracker>    m_latency;
 
-    Rc<hud::Hud>              m_hud;
+    small_vector<Com<D3D11Texture2D, false>, 4> m_backBuffers;
 
-    Com<D3D11Texture2D, false> m_backBuffer;
-    DxvkSubmitStatus          m_presentStatus;
+    uint64_t                  m_frameId      = DXGI_MAX_SWAP_CHAIN_BUFFERS;
+    uint32_t                  m_frameLatency = DefaultFrameLatency;
+    uint32_t                  m_frameLatencyCap = 0;
+    HANDLE                    m_frameLatencyEvent = nullptr;
+    Rc<sync::CallbackFence>   m_frameLatencySignal;
 
-    std::vector<Rc<DxvkImageView>> m_imageViews;
+    VkColorSpaceKHR           m_colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 
-    uint64_t                m_frameId      = DXGI_MAX_SWAP_CHAIN_BUFFERS;
-    uint32_t                m_frameLatency = DefaultFrameLatency;
-    uint32_t                m_frameLatencyCap = 0;
-    HANDLE                  m_frameLatencyEvent = nullptr;
-    Rc<sync::CallbackFence> m_frameLatencySignal;
-
-    HANDLE                  m_processHandle = nullptr;
-
-    bool                    m_dirty = true;
-
-    VkColorSpaceKHR         m_colorspace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-
-    std::optional<VkHdrMetadataEXT> m_hdrMetadata;
-    bool m_dirtyHdrMetadata = true;
+    double                    m_targetFrameRate = 0.0;
 
     dxvk::mutex               m_frameStatisticsLock;
     DXGI_VK_FRAME_STATISTICS  m_frameStatistics = { };
 
+    Rc<hud::HudLatencyItem>       m_latencyHud;
+    Rc<hud::HudRenderLatencyItem> m_renderLatencyHud;
+
+    Rc<DxvkImageView> GetBackBufferView();
+
     HRESULT PresentImage(UINT SyncInterval);
 
-    void SubmitPresent(
-            D3D11ImmediateContext*  pContext,
-      const PresenterSync&          Sync,
-            uint32_t                Repeat);
-
-    void SynchronizePresent();
-
-    void RecreateSwapChain();
+    void RotateBackBuffers(D3D11ImmediateContext* ctx);
 
     void CreateFrameLatencyEvent();
 
     void CreatePresenter();
 
-    VkResult CreateSurface(VkSurfaceKHR* pSurface);
-
-    void CreateRenderTargetViews();
-
-    void CreateBackBuffer();
+    void CreateBackBuffers();
 
     void CreateBlitter();
 
-    void CreateHud();
-
     void DestroyFrameLatencyEvent();
+
+    void DestroyLatencyTracker();
 
     void SyncFrameLatency();
 
     uint32_t GetActualFrameLatency();
-    
-    uint32_t PickFormats(
-            DXGI_FORMAT               Format,
-            VkSurfaceFormatKHR*       pDstFormats);
-    
-    uint32_t PickImageCount(
-            UINT                      Preferred);
-    
-    VkFullScreenExclusiveEXT PickFullscreenMode();
+
+    VkSurfaceFormatKHR GetSurfaceFormat(DXGI_FORMAT Format);
+
+    Com<D3D11ReflexDevice> GetReflexDevice();
 
     std::string GetApiName() const;
 

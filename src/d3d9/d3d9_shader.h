@@ -54,11 +54,18 @@ namespace dxvk {
 
     uint32_t GetMaxDefinedConstant() const { return m_maxDefinedConst; }
 
+    VkImageViewType GetImageViewType(uint32_t samplerSlot) const {
+      const uint32_t offset = samplerSlot * 2;
+      const uint32_t mask = 0b11;
+      return static_cast<VkImageViewType>((m_textureTypes >> offset) & mask);
+    }
+
   private:
 
     DxsoIsgn              m_isgn;
     uint32_t              m_usedSamplers;
     uint32_t              m_usedRTs;
+    uint32_t              m_textureTypes;
 
     DxsoProgramInfo       m_info;
     DxsoShaderMetaInfo    m_meta;
@@ -89,9 +96,8 @@ namespace dxvk {
             uint32_t             BytecodeLength)
       : D3D9DeviceChild<Base>( pDevice )
       , m_shader             ( CommonShader )
+      , m_bytecode           ( pAllocator->Alloc(BytecodeLength) )
       , m_bytecodeLength     ( BytecodeLength ) {
-
-      m_bytecode = pAllocator->Alloc(BytecodeLength);
       m_bytecode.Map();
       std::memcpy(m_bytecode.Ptr(), pShaderBytecode, BytecodeLength);
       m_bytecode.Unmap();

@@ -12,12 +12,12 @@ namespace dxvk {
 #endif
   }
 
-  D3D11Options::D3D11Options(const Config& config, const Rc<DxvkDevice>& device) {
-    this->dcSingleUseMode       = config.getOption<bool>("d3d11.dcSingleUseMode", true);
+  D3D11Options::D3D11Options(const Config& config) {
     this->zeroInitWorkgroupMemory  = config.getOption<bool>("d3d11.zeroInitWorkgroupMemory", false);
     this->forceVolatileTgsmAccess = config.getOption<bool>("d3d11.forceVolatileTgsmAccess", false);
+    this->forceComputeUavBarriers = config.getOption<bool>("d3d11.forceComputeUavBarriers", false);
     this->relaxedBarriers       = config.getOption<bool>("d3d11.relaxedBarriers", false);
-    this->ignoreGraphicsBarriers = config.getOption<bool>("d3d11.ignoreGraphicsBarriers", false);
+    this->relaxedGraphicsBarriers = config.getOption<bool>("d3d11.relaxedGraphicsBarriers", false);
     this->maxTessFactor         = config.getOption<int32_t>("d3d11.maxTessFactor", 0);
     this->samplerAnisotropy     = config.getOption<int32_t>("d3d11.samplerAnisotropy", -1);
     this->samplerLodBias        = config.getOption<float>("d3d11.samplerLodBias", 0.0f);
@@ -28,23 +28,12 @@ namespace dxvk {
     this->disableMsaa           = config.getOption<bool>("d3d11.disableMsaa", false);
     this->enableContextLock     = config.getOption<bool>("d3d11.enableContextLock", false);
     this->deferSurfaceCreation  = config.getOption<bool>("dxgi.deferSurfaceCreation", false);
-    this->numBackBuffers        = config.getOption<int32_t>("dxgi.numBackBuffers", 0);
     this->maxFrameLatency       = config.getOption<int32_t>("dxgi.maxFrameLatency", 0);
-    this->maxFrameRate          = config.getOption<int32_t>("dxgi.maxFrameRate", 0);
-    this->syncInterval          = config.getOption<int32_t>("dxgi.syncInterval", -1);
+    this->exposeDriverCommandLists = config.getOption<bool>("d3d11.exposeDriverCommandLists", true);
+    this->reproducibleCommandStream = config.getOption<bool>("d3d11.reproducibleCommandStream", false);
 
     // Clamp LOD bias so that people don't abuse this in unintended ways
     this->samplerLodBias = dxvk::fclamp(this->samplerLodBias, -2.0f, 1.0f);
-
-    int32_t maxImplicitDiscardSize = config.getOption<int32_t>("d3d11.maxImplicitDiscardSize", 256);
-    this->maxImplicitDiscardSize = maxImplicitDiscardSize >= 0
-      ? VkDeviceSize(maxImplicitDiscardSize) << 10
-      : VkDeviceSize(~0ull);
-
-    int32_t maxDynamicImageBufferSize = config.getOption<int32_t>("d3d11.maxDynamicImageBufferSize", -1);
-    this->maxDynamicImageBufferSize = maxDynamicImageBufferSize >= 0
-      ? VkDeviceSize(maxDynamicImageBufferSize) << 10
-      : VkDeviceSize(~0ull);
 
     auto cachedDynamicResources = config.getOption<std::string>("d3d11.cachedDynamicResources", std::string());
 

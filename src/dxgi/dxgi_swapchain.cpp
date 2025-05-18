@@ -4,6 +4,8 @@
 
 #include "../util/util_misc.h"
 
+#include <d3d12.h>
+
 namespace dxvk {
   
   DxgiSwapChain::DxgiSwapChain(
@@ -11,20 +13,26 @@ namespace dxvk {
           IDXGIVkSwapChain*           pPresenter,
           HWND                        hWnd,
     const DXGI_SWAP_CHAIN_DESC1*      pDesc,
-    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc)
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc,
+          IUnknown*                   pDevice)
   : m_factory   (pFactory),
     m_window    (hWnd),
     m_desc      (*pDesc),
     m_descFs    (*pFullscreenDesc),
     m_presentId (0u),
     m_presenter (pPresenter),
-    m_monitor   (wsi::getWindowMonitor(m_window)) {
+    m_monitor   (wsi::getWindowMonitor(m_window)),
+    m_is_d3d12(SUCCEEDED(pDevice->QueryInterface(__uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&Com<ID3D12CommandQueue>())))) {
+
     if (FAILED(m_presenter->GetAdapter(__uuidof(IDXGIAdapter), reinterpret_cast<void**>(&m_adapter))))
       throw DxvkError("DXGI: Failed to get adapter for present device");
 
     // Query updated interface versions from presenter, this
     // may fail e.g. with older vkd3d-proton builds.
     m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain1), reinterpret_cast<void**>(&m_presenter1));
+    m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain2), reinterpret_cast<void**>(&m_presenter2));
+
+    m_frameRateOption = m_factory->GetOptions()->maxFrameRate;
 
     // Query monitor info form DXVK's DXGI factory, if available
     m_factory->QueryInterface(__uuidof(IDXGIVkMonitorInfo), reinterpret_cast<void**>(&m_monitorInfo));
@@ -32,6 +40,17 @@ namespace dxvk {
     // Apply initial window mode and fullscreen state
     if (!m_descFs.Windowed && FAILED(EnterFullscreenMode(nullptr)))
       throw DxvkError("DXGI: Failed to set initial fullscreen state");
+
+    // Ensure that RGBA16 swap chains are scRGB if supported
+    UpdateColorSpace(m_desc.Format, m_colorSpace);
+
+    // Somewhat hacky way to determine whether to forward the
+    // display refresh rate in windowed mode even with a sync
+    // interval of 1.
+    if (!m_is_d3d12) {
+      auto instance = pFactory->GetDXVKInstance();
+      m_hasLatencyControl = instance->options().latencySleep == Tristate::True;
+    }
   }
   
   
@@ -202,7 +221,7 @@ namespace dxvk {
     pStats->PresentCount          = frameStatistics.PresentCount;
     pStats->PresentRefreshCount   = 0;
     pStats->SyncRefreshCount      = 0;
-    pStats->SyncQPCTime.QuadPart  = t1Counter;
+    pStats->SyncQPCTime.QuadPart  = frameStatistics.PresentQPCTime;
     pStats->SyncGPUTime.QuadPart  = 0;
 
     if (SUCCEEDED(AcquireMonitorData(m_monitor, &monitorData))) {
@@ -237,7 +256,9 @@ namespace dxvk {
           BOOL*         pFullscreen,
           IDXGIOutput** ppTarget) {
     HRESULT hr = S_OK;
-    
+
+    if (!m_is_d3d12 && !m_descFs.Windowed && wsi::isOccluded(m_window))
+      SetFullscreenState(FALSE, nullptr);
     if (pFullscreen != nullptr)
       *pFullscreen = !m_descFs.Windowed;
     
@@ -300,17 +321,36 @@ namespace dxvk {
   
   
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::Present(UINT SyncInterval, UINT Flags) {
-    return Present1(SyncInterval, Flags, nullptr);
+    return PresentBase(SyncInterval, Flags, nullptr);
   }
-  
-  
+
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::Present1(
+          UINT                      SyncInterval,
+          UINT                      PresentFlags,
+    const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
+
+    return PresentBase(SyncInterval, PresentFlags, pPresentParameters);
+  }
+
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::PresentBase(
           UINT                      SyncInterval,
           UINT                      PresentFlags,
     const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
 
     if (SyncInterval > 4)
       return DXGI_ERROR_INVALID_CALL;
+
+    if ((m_desc.SwapEffect == DXGI_SWAP_EFFECT_DISCARD || m_desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL) && wsi::isMinimized(m_window))
+      return DXGI_STATUS_OCCLUDED;
+    bool occluded = !m_descFs.Windowed && wsi::isOccluded(m_window) && !wsi::isMinimized(m_window);
+
+    auto options = m_factory->GetOptions();
+
+    if (options->syncInterval >= 0)
+      SyncInterval = options->syncInterval;
+
+    UpdateGlobalHDRState();
+    UpdateTargetFrameRate(SyncInterval);
 
     std::lock_guard<dxvk::recursive_mutex> lockWin(m_lockWindow);
     HRESULT hr = S_OK;
@@ -321,7 +361,7 @@ namespace dxvk {
     }
 
     if (PresentFlags & DXGI_PRESENT_TEST)
-      return hr;
+      return hr == S_OK && occluded ? DXGI_STATUS_OCCLUDED : hr;
 
     if (hr == S_OK) {
 
@@ -343,6 +383,11 @@ namespace dxvk {
         monitorData->FrameStats.PresentCount += 1;
         monitorData->FrameStats.PresentRefreshCount = monitorData->FrameStats.SyncRefreshCount + computeRefreshCount(t0, t1, refreshPeriod);
         ReleaseMonitorData();
+      }
+      if (occluded) {
+        if (!(PresentFlags & DXGI_PRESENT_TEST))
+          SetFullscreenState(FALSE, nullptr);
+        hr = DXGI_STATUS_OCCLUDED;
       }
     }
 
@@ -391,7 +436,13 @@ namespace dxvk {
     if (Format != DXGI_FORMAT_UNKNOWN)
       m_desc.Format = Format;
     
-    return m_presenter->ChangeProperties(&m_desc, pCreationNodeMask, ppPresentQueue);
+    HRESULT hr = m_presenter->ChangeProperties(&m_desc, pCreationNodeMask, ppPresentQueue);
+
+    if (FAILED(hr))
+      return hr;
+
+    UpdateColorSpace(m_desc.Format, m_colorSpace);
+    return hr;
   }
 
 
@@ -433,9 +484,7 @@ namespace dxvk {
         return E_FAIL;
       }
       
-      // If the swap chain allows it, change the display mode
-      if (m_desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH)
-        ChangeDisplayMode(output.ptr(), &newDisplayMode);
+      ChangeDisplayMode(output.ptr(), &newDisplayMode);
 
       wsi::updateFullscreenWindow(m_monitor, m_window, false);
     }
@@ -565,36 +614,31 @@ namespace dxvk {
     if (!pColorSpaceSupport)
       return E_INVALIDARG;
 
-    // Don't expose any color spaces other than standard
-    // sRGB if the enableHDR option is not set.
-    //
-    // If we ever have a use for the non-SRGB non-HDR colorspaces
-    // some day, we may want to revisit this.
-    if (ColorSpace != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
-     && !m_factory->GetOptions()->enableHDR) {
-      *pColorSpaceSupport = 0;
-      return S_OK;
-    }
+    std::lock_guard<dxvk::mutex> lock(m_lockBuffer);
 
-    UINT support = m_presenter->CheckColorSpaceSupport(ColorSpace);
-    *pColorSpaceSupport = support;
+    if (ValidateColorSpaceSupport(m_desc.Format, ColorSpace))
+      *pColorSpaceSupport = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
+    else
+      *pColorSpaceSupport = 0;
+
     return S_OK;
   }
 
 
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::SetColorSpace1(DXGI_COLOR_SPACE_TYPE ColorSpace) {
-    UINT support = m_presenter->CheckColorSpaceSupport(ColorSpace);
+    std::lock_guard<dxvk::mutex> lock(m_lockBuffer);
 
-    if (!support)
+    if (!ValidateColorSpaceSupport(m_desc.Format, ColorSpace))
       return E_INVALIDARG;
 
-    std::lock_guard<dxvk::mutex> lock(m_lockBuffer);
-    HRESULT hr = m_presenter->SetColorSpace(ColorSpace);
-    if (SUCCEEDED(hr)) {
-      // If this was a colorspace other than our current one,
-      // punt us into that one on the DXGI output.
-      m_monitorInfo->PuntColorSpace(ColorSpace);
-    }
+    // Write back color space if setting it up succeeded. This way, we preserve
+    // the current color space even if the swap chain temporarily switches to a
+    // back buffer format which does not support it.
+    HRESULT hr = UpdateColorSpace(m_desc.Format, ColorSpace);
+
+    if (SUCCEEDED(hr))
+      m_colorSpace = ColorSpace;
+
     return hr;
   }
 
@@ -638,6 +682,12 @@ namespace dxvk {
 
 
   HRESULT DxgiSwapChain::EnterFullscreenMode(IDXGIOutput1* pTarget) {
+    if (m_ModeChangeInProgress) {
+      Logger::warn("Nested EnterFullscreenMode");
+      return DXGI_STATUS_MODE_CHANGE_IN_PROGRESS;
+    }
+    scoped_bool in_progress(m_ModeChangeInProgress);
+
     Com<IDXGIOutput1> output = pTarget;
 
     if (!wsi::isWindow(m_window))
@@ -650,35 +700,33 @@ namespace dxvk {
       }
     }
 
-    const bool modeSwitch = m_desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    DXGI_MODE_DESC1 displayMode = { };
+    displayMode.Width            = m_desc.Width;
+    displayMode.Height           = m_desc.Height;
+    displayMode.RefreshRate      = m_descFs.RefreshRate;
+    displayMode.Format           = m_desc.Format;
+    // Ignore these two, games usually use them wrong and we don't
+    // support any scaling modes except UNSPECIFIED anyway.
+    displayMode.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+    displayMode.Scaling          = DXGI_MODE_SCALING_UNSPECIFIED;
     
-    if (modeSwitch) {
-      DXGI_MODE_DESC1 displayMode = { };
-      displayMode.Width            = m_desc.Width;
-      displayMode.Height           = m_desc.Height;
-      displayMode.RefreshRate      = m_descFs.RefreshRate;
-      displayMode.Format           = m_desc.Format;
-      // Ignore these two, games usually use them wrong and we don't
-      // support any scaling modes except UNSPECIFIED anyway.
-      displayMode.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
-      displayMode.Scaling          = DXGI_MODE_SCALING_UNSPECIFIED;
-      
-      if (FAILED(ChangeDisplayMode(output.ptr(), &displayMode))) {
-        Logger::err("DXGI: EnterFullscreenMode: Failed to change display mode");
-        return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
-      }
+    if (FAILED(ChangeDisplayMode(output.ptr(), &displayMode))) {
+      Logger::err("DXGI: EnterFullscreenMode: Failed to change display mode");
+      return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
     }
     
     // Update swap chain description
     m_descFs.Windowed = FALSE;
     
     // Move the window so that it covers the entire output
+    bool modeSwitch = (m_desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH) != 0u;
+
     DXGI_OUTPUT_DESC desc;
     output->GetDesc(&desc);
 
     if (!wsi::enterFullscreenMode(desc.Monitor, m_window, &m_windowState, modeSwitch)) {
-        Logger::err("DXGI: EnterFullscreenMode: Failed to enter fullscreen mode");
-        return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
+      Logger::err("DXGI: EnterFullscreenMode: Failed to enter fullscreen mode");
+      return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
     }
     
     m_monitor = desc.Monitor;
@@ -700,6 +748,12 @@ namespace dxvk {
   
   
   HRESULT DxgiSwapChain::LeaveFullscreenMode() {
+    if (m_ModeChangeInProgress) {
+      Logger::warn("Nested LeaveFullscreenMode");
+      return DXGI_STATUS_MODE_CHANGE_IN_PROGRESS;
+    }
+    scoped_bool in_progress(m_ModeChangeInProgress);
+
     if (FAILED(RestoreDisplayMode(m_monitor)))
       Logger::warn("DXGI: LeaveFullscreenMode: Failed to restore display mode");
     
@@ -713,7 +767,7 @@ namespace dxvk {
       SetGammaControl(0, nullptr);
       ReleaseMonitorData();
     }
-    
+
     // Restore internal state
     m_descFs.Windowed = TRUE;
     m_target  = nullptr;
@@ -742,14 +796,19 @@ namespace dxvk {
     pOutput->GetDesc(&outputDesc);
     
     DXGI_MODE_DESC1 preferredMode = *pDisplayMode;
-    DXGI_MODE_DESC1 selectedMode;
+    DXGI_MODE_DESC1 selectedMode = { };
+
+    if (!(m_desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH)) {
+      preferredMode.Width = 0;
+      preferredMode.Height = 0;
+    }
 
     if (preferredMode.Format == DXGI_FORMAT_UNKNOWN)
       preferredMode.Format = m_desc.Format;
     
     HRESULT hr = pOutput->FindClosestMatchingMode1(
       &preferredMode, &selectedMode, nullptr);
-    
+
     if (FAILED(hr)) {
       Logger::err(str::format(
         "DXGI: Failed to query closest mode:",
@@ -759,7 +818,10 @@ namespace dxvk {
       return hr;
     }
 
-    if (!wsi::setWindowMode(outputDesc.Monitor, m_window, ConvertDisplayMode(selectedMode)))
+    if (!selectedMode.RefreshRate.Denominator)
+      selectedMode.RefreshRate.Denominator = 1;
+
+    if (!wsi::setWindowMode(outputDesc.Monitor, m_window, &m_windowState, ConvertDisplayMode(selectedMode)))
       return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
 
     DXGI_VK_MONITOR_DATA* monitorData = nullptr;
@@ -780,6 +842,8 @@ namespace dxvk {
       ReleaseMonitorData();
     }
 
+    m_frameRateRefresh = double(selectedMode.RefreshRate.Numerator)
+                       / double(selectedMode.RefreshRate.Denominator);
     return S_OK;
   }
   
@@ -791,6 +855,7 @@ namespace dxvk {
     if (!wsi::restoreDisplayMode())
       return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
 
+    m_frameRateRefresh = 0.0;
     return S_OK;
   }
   
@@ -860,6 +925,120 @@ namespace dxvk {
   void DxgiSwapChain::ReleaseMonitorData() {
     if (m_monitorInfo != nullptr)
       m_monitorInfo->ReleaseMonitorData();
+  }
+
+
+  void DxgiSwapChain::UpdateGlobalHDRState() {
+    // Update the global HDR state if called from the legacy NVAPI
+    // interfaces, etc.
+
+    auto state = m_factory->GlobalHDRState();
+    if (m_globalHDRStateSerial != state.Serial) {
+      SetColorSpace1(state.ColorSpace);
+
+      switch (state.Metadata.Type) {
+        case DXGI_HDR_METADATA_TYPE_NONE:
+          SetHDRMetaData(DXGI_HDR_METADATA_TYPE_NONE, 0, nullptr);
+          break;
+        case DXGI_HDR_METADATA_TYPE_HDR10:
+          SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10, sizeof(state.Metadata.HDR10), reinterpret_cast<void*>(&state.Metadata.HDR10));
+          break;
+        default:
+          Logger::err(str::format("DXGI: Unsupported HDR metadata type (global): ", state.Metadata.Type));
+          break;
+      }
+
+      m_globalHDRStateSerial = state.Serial;
+    }
+  }
+
+
+  bool DxgiSwapChain::ValidateColorSpaceSupport(
+          DXGI_FORMAT             Format,
+          DXGI_COLOR_SPACE_TYPE   ColorSpace) {
+    // RGBA16 swap chains are treated as scRGB even on SDR displays,
+    // and regular sRGB is not exposed when this format is used.
+    if (Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+      return ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+
+    // For everything else, we will always expose plain sRGB
+    if (ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)
+      return true;
+
+    // Only expose HDR10 color space if HDR option is enabled
+    if (ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+      return m_factory->GetOptions()->enableHDR && m_presenter->CheckColorSpaceSupport(ColorSpace);
+
+    return false;
+  }
+
+
+  HRESULT DxgiSwapChain::UpdateColorSpace(
+          DXGI_FORMAT             Format,
+          DXGI_COLOR_SPACE_TYPE   ColorSpace) {
+    // Don't do anything if the explicitly sepected color space
+    // is compatible with the back buffer format already
+    if (!ValidateColorSpaceSupport(Format, ColorSpace)) {
+      ColorSpace = Format == DXGI_FORMAT_R16G16B16A16_FLOAT
+        ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
+        : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    }
+
+    // Ensure that we pick a supported color space. This is relevant for
+    // mapping scRGB to sRGB on SDR setups, matching Windows behaviour.
+    if (!m_presenter->CheckColorSpaceSupport(ColorSpace))
+      ColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+
+    HRESULT hr = m_presenter->SetColorSpace(ColorSpace);
+
+    // If this was a colorspace other than our current one,
+    // punt us into that one on the DXGI output.
+    if (SUCCEEDED(hr))
+      m_monitorInfo->PuntColorSpace(ColorSpace);
+
+    return hr;
+  }
+
+
+  void DxgiSwapChain::UpdateTargetFrameRate(
+          UINT                    SyncInterval) {
+    if (m_presenter2 == nullptr)
+      return;
+
+    // Engage the frame limiter with large sync intervals even in windowed
+    // mode since we want to avoid double-presenting to the swap chain.
+    if (SyncInterval != m_frameRateSyncInterval && m_descFs.Windowed) {
+      bool engageLimiter = (SyncInterval > 1u) || (SyncInterval && m_hasLatencyControl);
+
+      m_frameRateSyncInterval = SyncInterval;
+      m_frameRateRefresh = 0.0f;
+
+      if (engageLimiter && wsi::isWindow(m_window)) {
+        wsi::WsiMode mode = { };
+
+        if (wsi::getCurrentDisplayMode(wsi::getWindowMonitor(m_window), &mode)) {
+          if (mode.refreshRate.numerator && mode.refreshRate.denominator) {
+            m_frameRateRefresh = double(mode.refreshRate.numerator)
+                               / double(mode.refreshRate.denominator);
+          }
+        }
+      }
+    } else if (!m_descFs.Windowed) {
+      // Reset tracking when in fullscreen mode
+      m_frameRateSyncInterval = 0;
+    }
+
+    // Use a negative number to indicate that the limiter should only
+    // be engaged if the target frame rate is actually exceeded
+    double frameRate = std::max(m_frameRateOption, 0.0);
+
+    if (SyncInterval && m_frameRateOption == 0.0)
+      frameRate = -m_frameRateRefresh / double(SyncInterval);
+
+    if (m_frameRateLimit != frameRate) {
+      m_frameRateLimit = frameRate;
+      m_presenter2->SetTargetFrameRate(frameRate);
+    }
   }
 
 }

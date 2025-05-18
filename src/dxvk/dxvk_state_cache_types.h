@@ -60,7 +60,7 @@ namespace dxvk {
    */
   struct DxvkStateCacheHeader {
     char     magic[4]   = { 'D', 'X', 'V', 'K' };
-    uint32_t version    = 17;
+    uint32_t version    = 18;
     uint32_t entrySize  = 0; /* no longer meaningful */
   };
 
@@ -142,7 +142,7 @@ namespace dxvk {
         VkPolygonMode(m_polygonMode),
         VkSampleCountFlags(m_sampleCount),
         VkConservativeRasterizationModeEXT(m_conservativeMode),
-        VK_FALSE);
+        VK_FALSE, VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT);
     }
 
   };
@@ -168,7 +168,7 @@ namespace dxvk {
         VkPolygonMode(m_polygonMode),
         VkSampleCountFlags(m_sampleCount),
         VkConservativeRasterizationModeEXT(m_conservativeMode),
-        VK_FALSE);
+        VK_FALSE, VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT);
     }
 
   };

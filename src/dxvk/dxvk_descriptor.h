@@ -13,16 +13,6 @@ namespace dxvk {
   class DxvkDescriptorManager;
   
   /**
-   * \brief DXVK context type
-   *
-   * Used as a hint to optimize certain usage patterns.
-   */
-  enum class DxvkContextType : uint32_t {
-    Primary       = 0,
-    Supplementary = 1,
-  };
-
-  /**
    * \brief Descriptor info
    * 
    * Stores information that is required to
@@ -80,13 +70,12 @@ namespace dxvk {
    * to be updated.
    */
   class DxvkDescriptorPool : public RcObject {
-
+    constexpr static uint32_t MaxDesiredPoolCount = 2;
   public:
 
     DxvkDescriptorPool(
             DxvkDevice*               device,
-            DxvkDescriptorManager*    manager,
-            DxvkContextType           contextType);
+            DxvkDescriptorManager*    manager);
 
     ~DxvkDescriptorPool();
 
@@ -134,7 +123,6 @@ namespace dxvk {
 
     DxvkDevice*               m_device;
     DxvkDescriptorManager*    m_manager;
-    DxvkContextType           m_contextType;
 
     std::vector<VkDescriptorPool> m_descriptorPools;
 
@@ -154,8 +142,6 @@ namespace dxvk {
     uint32_t m_setsUsed       = 0;
 
     uint32_t m_prevSetsAllocated = 0;
-
-    uint32_t m_lowUsageFrames = 0;
 
     DxvkDescriptorSetMap* getSetMapCached(
       const DxvkBindingLayoutObjects*           layout);
@@ -186,8 +172,7 @@ namespace dxvk {
   public:
 
     DxvkDescriptorManager(
-            DxvkDevice*                 device,
-            DxvkContextType             contextType);
+            DxvkDevice*                 device);
 
     ~DxvkDescriptorManager();
 
@@ -236,7 +221,6 @@ namespace dxvk {
   private:
 
     DxvkDevice*                         m_device;
-    DxvkContextType                     m_contextType;
     uint32_t                            m_maxSets = 0;
     DxvkRecycler<DxvkDescriptorPool, 8> m_pools;
 

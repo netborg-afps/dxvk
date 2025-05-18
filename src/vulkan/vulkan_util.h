@@ -4,7 +4,65 @@
 
 #include "vulkan_loader.h"
 
+#if defined(_MSC_VER)
+// Unary minus on unsigned type
+#pragma warning( disable : 4146 )
+#endif
+
 namespace dxvk::vk {
+
+  constexpr static VkAccessFlags AccessReadMask
+    = VK_ACCESS_INDIRECT_COMMAND_READ_BIT
+    | VK_ACCESS_INDEX_READ_BIT
+    | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT
+    | VK_ACCESS_UNIFORM_READ_BIT
+    | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT
+    | VK_ACCESS_SHADER_READ_BIT
+    | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+    | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+    | VK_ACCESS_TRANSFER_READ_BIT
+    | VK_ACCESS_MEMORY_READ_BIT
+    | VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
+    
+  constexpr static VkAccessFlags AccessWriteMask
+    = VK_ACCESS_SHADER_WRITE_BIT
+    | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+    | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+    | VK_ACCESS_TRANSFER_WRITE_BIT
+    | VK_ACCESS_MEMORY_WRITE_BIT
+    | VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT
+    | VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
+
+  constexpr static VkAccessFlags AccessDeviceMask
+    = AccessWriteMask | AccessReadMask;
+
+  constexpr static VkAccessFlags AccessHostMask
+    = VK_ACCESS_HOST_READ_BIT
+    | VK_ACCESS_HOST_WRITE_BIT;
+
+  constexpr static VkAccessFlags AccessGfxSideEffectMask
+    = VK_ACCESS_SHADER_WRITE_BIT
+    | VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT
+    | VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
+
+  constexpr static VkPipelineStageFlags StageDeviceMask
+    = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+    | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT
+    | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT
+    | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT
+    | VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT
+    | VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT
+    | VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT
+    | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+    | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+    | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
+    | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+    | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+    | VK_PIPELINE_STAGE_TRANSFER_BIT
+    | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT
+    | VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT
+    | VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+    | VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT;
 
   inline VkImageSubresourceRange makeSubresourceRange(
     const VkImageSubresourceLayers& layers) {
@@ -156,6 +214,63 @@ namespace dxvk::vk {
 
       ppNext = &pStruct->pNext;
     }
+  }
+
+
+  inline uint64_t getObjectHandle(uint64_t handle) {
+    return handle;
+  }
+
+
+  template<typename T>
+  uint64_t getObjectHandle(T* object) {
+    return reinterpret_cast<uintptr_t>(object);
+  }
+
+
+  inline bool isValidDebugName(const char* name) {
+    return name && name[0];
+  }
+
+
+  /**
+   * \brief Queries sRGB and non-sSRGB format pair
+   *
+   * \param [in] format Format to look up
+   * \returns Pair of the corresponding non-SRGB and sRGB formats.
+   *    If the format in quesion has no sRGB equivalent, this
+   *    function returns \c VK_FORMAT_UNDEFINED.
+   */
+  inline std::pair<VkFormat, VkFormat> getSrgbFormatPair(VkFormat format) {
+    static const std::array<std::pair<VkFormat, VkFormat>, 3> srgbFormatMap = {{
+      { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB },
+      { VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_SRGB },
+      { VK_FORMAT_A8B8G8R8_UNORM_PACK32, VK_FORMAT_A8B8G8R8_SRGB_PACK32 },
+    }};
+
+    for (const auto& f : srgbFormatMap) {
+      if (f.first == format || f.second == format)
+        return f;
+    }
+
+    return std::make_pair(VK_FORMAT_UNDEFINED, VK_FORMAT_UNDEFINED);
+  }
+
+
+  /**
+   * \brief Makes debug label
+   *
+   * \param [in] color Color, as BGR with implied opaque alpha
+   * \param [in] text Label text
+   */
+  inline VkDebugUtilsLabelEXT makeLabel(uint32_t color, const char* text) {
+    VkDebugUtilsLabelEXT label = { VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT };
+    label.color[0] = ((color >> 16u) & 0xffu) / 255.0f;
+    label.color[1] = ((color >> 8u)  & 0xffu) / 255.0f;
+    label.color[2] = ((color >> 0u)  & 0xffu) / 255.0f;
+    label.color[3] = color ? 1.0f : 0.0f;
+    label.pLabelName = text;
+    return label;
   }
 
 }

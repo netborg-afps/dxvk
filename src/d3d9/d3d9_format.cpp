@@ -429,18 +429,49 @@ namespace dxvk {
 
       case D3D9Format::RAWZ: return {}; // Unsupported
 
+      case D3D9Format::R16:  return {}; // Unsupported
+
+      case D3D9Format::AL16: return {}; // Unsupported
+
       default:
         Logger::warn(str::format("ConvertFormat: Unknown format encountered: ", Format));
         return {}; // Unsupported
     }
   }
 
+  // Block size of formats that require some form of alignment
+  D3D9_FORMAT_BLOCK_SIZE GetFormatAlignedBlockSize(D3D9Format Format) {
+    switch (Format) {
+      case D3D9Format::DXT1:
+      case D3D9Format::DXT2:
+      case D3D9Format::DXT3:
+      case D3D9Format::DXT4:
+      case D3D9Format::DXT5:
+      case D3D9Format::ATI1:
+      case D3D9Format::ATI2:
+        return { 4, 4, 1 };
+
+      case D3D9Format::YUY2:
+      case D3D9Format::UYVY:
+        return { 2, 1, 1 };
+
+      default:
+        return {}; // Irrelevant or unknown block size
+    }
+  }
+
   D3D9VkFormatTable::D3D9VkFormatTable(
     const Rc<DxvkAdapter>& adapter,
     const D3D9Options&     options) {
-    m_dfSupport = options.supportDFFormats;
+
+    const auto& props = adapter->deviceProperties();
+    uint32_t vendorId  = options.customVendorId == -1 ? props.vendorID : uint32_t(options.customVendorId);
+
+    // NVIDIA does not natively support any DF formats
+    m_dfSupport = vendorId == uint32_t(DxvkGpuVendor::Nvidia) ? false : options.supportDFFormats;
     m_x4r4g4b4Support = options.supportX4R4G4B4;
-    m_d32supportFinal = options.supportD32;
+    // Only AMD supports D16_LOCKABLE natively
+    m_d16lockableSupport = vendorId == uint32_t(DxvkGpuVendor::Amd) ? true : options.supportD16Lockable;
 
     // AMD do not support 24-bit depth buffers on Vulkan,
     // so we have to fall back to a 32-bit depth format.
@@ -473,17 +504,17 @@ namespace dxvk {
     if (Format == D3D9Format::X4R4G4B4 && !m_x4r4g4b4Support)
       return D3D9_VK_FORMAT_MAPPING();
 
+    if (Format == D3D9Format::D16_LOCKABLE && !m_d16lockableSupport)
+      return D3D9_VK_FORMAT_MAPPING();
+
     if (Format == D3D9Format::DF16 && !m_dfSupport)
       return D3D9_VK_FORMAT_MAPPING();
 
     if (Format == D3D9Format::DF24 && !m_dfSupport)
       return D3D9_VK_FORMAT_MAPPING();
-
-    if (Format == D3D9Format::D32 && !m_d32supportFinal)
-      return D3D9_VK_FORMAT_MAPPING();
     
     if (!m_d24s8Support && mapping.FormatColor == VK_FORMAT_D24_UNORM_S8_UINT)
-      mapping.FormatColor = mapping.Aspect & VK_IMAGE_ASPECT_STENCIL_BIT ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT;
+      mapping.FormatColor = (mapping.Aspect & VK_IMAGE_ASPECT_STENCIL_BIT) ? VK_FORMAT_D32_SFLOAT_S8_UINT : VK_FORMAT_D32_SFLOAT;
 
     if (!m_d16s8Support && mapping.FormatColor == VK_FORMAT_D16_UNORM_S8_UINT)
       mapping.FormatColor = m_d24s8Support ? VK_FORMAT_D24_UNORM_S8_UINT : VK_FORMAT_D32_SFLOAT_S8_UINT;
@@ -499,9 +530,6 @@ namespace dxvk {
     static const DxvkFormatInfo a8r3g3b2    = { 2, VK_IMAGE_ASPECT_COLOR_BIT };
     static const DxvkFormatInfo a8p8        = { 2, VK_IMAGE_ASPECT_COLOR_BIT };
     static const DxvkFormatInfo p8          = { 1, VK_IMAGE_ASPECT_COLOR_BIT };
-    static const DxvkFormatInfo l6v5u5      = { 2, VK_IMAGE_ASPECT_COLOR_BIT };
-    static const DxvkFormatInfo x8l8v8u8    = { 4, VK_IMAGE_ASPECT_COLOR_BIT };
-    static const DxvkFormatInfo a2w10v10u10 = { 4, VK_IMAGE_ASPECT_COLOR_BIT };
     static const DxvkFormatInfo cxv8u8      = { 2, VK_IMAGE_ASPECT_COLOR_BIT };
     static const DxvkFormatInfo unknown     = {};
 
@@ -520,15 +548,6 @@ namespace dxvk {
 
       case D3D9Format::P8:
         return &p8;
-
-      case D3D9Format::L6V5U5:
-        return &l6v5u5;
-
-      case D3D9Format::X8L8V8U8:
-        return &x8l8v8u8;
-
-      case D3D9Format::A2W10V10U10:
-        return &a2w10v10u10;
 
       // MULTI2_ARGB8 -> Don't have a clue what this is.
 

@@ -127,6 +127,7 @@ namespace dxvk {
   INT STDMETHODCALLTYPE D3D9UserDefinedAnnotation::BeginEvent(
           D3DCOLOR                Color,
           LPCWSTR                 Name) {
+    D3D9DeviceLock lock = m_container->LockDevice();
     m_container->EmitCs([color = Color, labelName = dxvk::str::fromws(Name)](DxvkContext *ctx) {
       VkDebugUtilsLabelEXT label;
       label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
@@ -134,7 +135,7 @@ namespace dxvk {
       label.pLabelName = labelName.c_str();
       DecodeD3DCOLOR(color, label.color);
 
-      ctx->beginDebugLabel(&label);
+      ctx->beginDebugLabel(label);
     });
 
     // Handled by the global list.
@@ -143,6 +144,7 @@ namespace dxvk {
 
 
   INT STDMETHODCALLTYPE D3D9UserDefinedAnnotation::EndEvent() {
+    D3D9DeviceLock lock = m_container->LockDevice();
     m_container->EmitCs([](DxvkContext *ctx) {
       ctx->endDebugLabel();
     });
@@ -155,6 +157,7 @@ namespace dxvk {
   void STDMETHODCALLTYPE D3D9UserDefinedAnnotation::SetMarker(
           D3DCOLOR                Color,
           LPCWSTR                 Name) {
+    D3D9DeviceLock lock = m_container->LockDevice();
     m_container->EmitCs([color = Color, labelName = dxvk::str::fromws(Name)](DxvkContext *ctx) {
       VkDebugUtilsLabelEXT label;
       label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
@@ -162,7 +165,7 @@ namespace dxvk {
       label.pLabelName = labelName.c_str();
       DecodeD3DCOLOR(color, label.color);
 
-      ctx->insertDebugLabel(&label);
+      ctx->insertDebugLabel(label);
     });
   }
 

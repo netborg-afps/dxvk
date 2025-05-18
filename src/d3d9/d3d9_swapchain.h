@@ -50,6 +50,15 @@ namespace dxvk {
     D3D9SwapChainEx *m_swapchain;
   };
 
+  struct D3D9WindowContext {
+    Rc<Presenter>                  presenter;
+
+    uint64_t                       frameId = D3D9DeviceEx::MaxFrameLatency;
+    Rc<sync::Fence>                frameLatencySignal;
+
+    uint32_t                       deviceResetCounter = 0u;
+  };
+
   using D3D9SwapChainExBase = D3D9DeviceChild<IDirect3DSwapChain9Ex>;
   class D3D9SwapChainEx final : public D3D9SwapChainExBase {
     static constexpr uint32_t NumControlPoints = 256;
@@ -60,7 +69,8 @@ namespace dxvk {
     D3D9SwapChainEx(
             D3D9DeviceEx*          pDevice,
             D3DPRESENT_PARAMETERS* pPresentParams,
-      const D3DDISPLAYMODEEX*      pFullscreenDisplayMode);
+      const D3DDISPLAYMODEEX*      pFullscreenDisplayMode,
+            bool                   EnableLatencyTracking);
 
     ~D3D9SwapChainEx();
 
@@ -110,6 +120,10 @@ namespace dxvk {
 
     void    Invalidate(HWND hWindow);
 
+    void SetCursorTexture(UINT Width, UINT Height, uint8_t* pCursorBitmap);
+
+    void SetCursorPosition(int32_t X, int32_t Y, UINT Width, UINT Height);
+
     HRESULT SetDialogBoxMode(bool bEnableDialogs);
 
     D3D9Surface* GetBackBuffer(UINT iBackBuffer);
@@ -122,7 +136,7 @@ namespace dxvk {
 
     void DestroyBackBuffers();
 
-    void SetApiName(const char* name);
+    bool UpdateWindowCtx();
 
   private:
 
@@ -135,12 +149,13 @@ namespace dxvk {
     D3DGAMMARAMP              m_ramp;
 
     Rc<DxvkDevice>            m_device;
-    Rc<DxvkContext>           m_context;
     Rc<DxvkSwapchainBlitter>  m_blitter;
 
-    Rc<Presenter>             m_presenter;
+    std::unordered_map<
+      HWND,
+      D3D9WindowContext>      m_presenters;
 
-    Rc<hud::Hud>              m_hud;
+    D3D9WindowContext*        m_wctx = nullptr;
 
     std::vector<Com<D3D9Surface, false>> m_backBuffers;
     
@@ -149,74 +164,59 @@ namespace dxvk {
     VkExtent2D                m_swapchainExtent = { 0u, 0u };
     bool                      m_partialCopy = false;
 
-    DxvkSubmitStatus          m_presentStatus;
-
-    std::vector<Rc<DxvkImageView>> m_imageViews;
-
-
-    uint64_t                  m_frameId           = D3D9DeviceEx::MaxFrameLatency;
-    uint32_t                  m_frameLatencyCap   = 0;
-    Rc<sync::Fence>           m_frameLatencySignal;
-
-    bool                      m_dirty    = true;
-    bool                      m_dialog   = false;
-    bool                      m_lastDialog = false;
+    uint32_t                  m_frameLatencyCap = 0;
 
     HWND                      m_window   = nullptr;
     HMONITOR                  m_monitor  = nullptr;
 
     wsi::DxvkWindowState      m_windowState;
 
-    double                    m_displayRefreshRate = 0.0;
+    double                    m_targetFrameRate = 0.0;
 
-    const char*               m_apiName  = nullptr;
+    double                    m_displayRefreshRate = 0.0;
+    bool                      m_displayRefreshRateDirty = true;
 
     bool                      m_warnedAboutGDIFallback = false;
 
     VkColorSpaceKHR           m_colorspace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 
+    bool                      m_latencyTracking = false;
+    Rc<DxvkLatencyTracker>    m_latencyTracker = nullptr;
+
+    Rc<hud::HudClientApiItem>     m_apiHud;
+    Rc<hud::HudLatencyItem>       m_latencyHud;
+    Rc<hud::HudRenderLatencyItem> m_renderLatencyHud;
+
     std::optional<VkHdrMetadataEXT> m_hdrMetadata;
-    bool m_dirtyHdrMetadata = true;
     bool m_unlockAdditionalFormats = false;
 
     D3D9VkExtSwapchain m_swapchainExt;
 
     void PresentImage(UINT PresentInterval);
 
-    void SubmitPresent(const PresenterSync& Sync, uint32_t Repeat);
-
-    void SynchronizePresent();
-
-    void RecreateSwapChain();
-
-    void CreatePresenter();
-
-    VkResult CreateSurface(VkSurfaceKHR* pSurface);
-
-    void CreateRenderTargetViews();
+    Rc<Presenter> CreatePresenter(
+            HWND                Window,
+            Rc<sync::Signal>    Signal);
 
     HRESULT CreateBackBuffers(
-            uint32_t            NumBackBuffers);
+            uint32_t            NumBackBuffers,
+            DWORD               Flags);
 
     void CreateBlitter();
 
-    void CreateHud();
+    void DestroyLatencyTracker();
 
     void InitRamp();
 
+    void UpdateTargetFrameRate(uint32_t SyncInterval);
+
     uint32_t GetActualFrameLatency();
 
-    uint32_t PickFormats(
-            D3D9Format                Format,
-            VkSurfaceFormatKHR*       pDstFormats);
+    VkSurfaceFormatKHR GetSurfaceFormat();
     
-    uint32_t PickImageCount(
-            UINT                      Preferred);
-
     void NormalizePresentParameters(D3DPRESENT_PARAMETERS* pPresentParams);
 
-    void NotifyDisplayRefreshRate(
-            double                  RefreshRate);
+    void UpdateWindowedRefreshRate();
 
     HRESULT EnterFullscreenMode(
             D3DPRESENT_PARAMETERS*  pPresentParams,
@@ -230,26 +230,27 @@ namespace dxvk {
     
     HRESULT RestoreDisplayMode(HMONITOR hMonitor);
 
-    bool    UpdatePresentRegion(const RECT* pSourceRect, const RECT* pDestRect);
+    void UpdatePresentRegion(const RECT* pSourceRect, const RECT* pDestRect);
+
+    void UpdatePresentParameters();
 
     VkExtent2D GetPresentExtent();
 
-    VkFullScreenExclusiveEXT PickFullscreenMode();
-
     std::string GetApiName();
 
+    bool IsDeviceReset(D3D9WindowContext* wctx);
+
     const Com<D3D9Surface, false>& GetFrontBuffer() const {
+      // Buffer 0 is the one that gets copied to the Vulkan backbuffer.
+      // We rotate buffers after presenting, so buffer 0 becomes the last buffer in the vector.
       return m_backBuffers.back();
     }
 
-    bool HasFrontBuffer() const {
+    bool SwapWithFrontBuffer() const {
       if (m_presentParams.SwapEffect == D3DSWAPEFFECT_COPY)
         return false;
 
-      if (m_presentParams.SwapEffect == D3DSWAPEFFECT_COPY_VSYNC)
-        return false;
-
-      // Tests show that SWAPEEFFECT_DISCARD + 1 backbuffer in windowed mode behaves identically to SWAPEFFECT_COPY
+      // Tests show that SWAPEEFFECT_DISCARD with 1 backbuffer in windowed mode behaves identically to SWAPEFFECT_COPY
       // For SWAPEFFECT_COPY we don't swap buffers but do another blit to the front buffer instead.
       if (m_presentParams.SwapEffect == D3DSWAPEFFECT_DISCARD && m_presentParams.BackBufferCount == 1 && m_presentParams.Windowed)
         return false;

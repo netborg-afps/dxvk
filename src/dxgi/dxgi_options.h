@@ -30,14 +30,31 @@ namespace dxvk {
     VkDeviceSize maxDeviceMemory;
     VkDeviceSize maxSharedMemory;
 
-    /// Emulate UMA
-    bool emulateUMA;
+    /// Reports Nvidia GPUs running on the proprietary driver as a different
+    /// vendor (usually AMD). Proton will generally disable this option.
+    bool hideNvidiaGpu;
 
-    /// Enables nvapi workaround
-    bool nvapiHack;
+    /// Reports Nvidia GPUs running on NVK as a different vendor (usually AMD)
+    bool hideNvkGpu;
+
+    /// Reports AMD GPUs as a different vendor (usually Nvidia)
+    bool hideAmdGpu;
+
+    /// Reports Intel GPUs as a different vendor (usually AMD)
+    bool hideIntelGpu;
 
     /// Enable HDR
     bool enableHDR;
+
+    /// Enable support for dummy composition swapchains
+    bool enableDummyCompositionSwapchain;
+
+    /// Limit frame rate
+    int32_t maxFrameRate;
+
+    /// Sync interval. Overrides the value
+    /// passed to IDXGISwapChain::Present.
+    int32_t syncInterval;
   };
   
 }

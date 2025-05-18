@@ -16,13 +16,13 @@ namespace dxvk {
     for (uint32_t i = 0; i < MaxNumRenderTargets; i++) {
       if (m_renderTargets.color[i].view != nullptr) {
         m_attachments[m_attachmentCount++] = i;
-        m_sampleCount = m_renderTargets.color[i].view->imageInfo().sampleCount;
+        m_sampleCount = m_renderTargets.color[i].view->image()->info().sampleCount;
       }
     }
 
     if (m_renderTargets.depth.view != nullptr) {
       m_attachments[m_attachmentCount++] = -1;
-      m_sampleCount = m_renderTargets.depth.view->imageInfo().sampleCount;
+      m_sampleCount = m_renderTargets.depth.view->image()->info().sampleCount;
     }
   }
 
@@ -58,7 +58,7 @@ namespace dxvk {
   bool DxvkFramebufferInfo::isFullSize(const Rc<DxvkImageView>& view) const {
     return m_renderSize.width  == view->mipLevelExtent(0).width
         && m_renderSize.height == view->mipLevelExtent(0).height
-        && m_renderSize.layers == view->info().numLayers;
+        && m_renderSize.layers == view->info().layerCount;
   }
 
 
@@ -118,7 +118,7 @@ namespace dxvk {
   DxvkFramebufferSize DxvkFramebufferInfo::computeRenderTargetSize(
     const Rc<DxvkImageView>& renderTarget) const {
     auto extent = renderTarget->mipLevelExtent(0);
-    auto layers = renderTarget->info().numLayers;
+    auto layers = renderTarget->info().layerCount;
     return DxvkFramebufferSize { extent.width, extent.height, layers };
   }
 

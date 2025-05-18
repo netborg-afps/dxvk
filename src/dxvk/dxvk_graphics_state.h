@@ -223,13 +223,15 @@ namespace dxvk {
             VkPolygonMode         polygonMode,
             VkSampleCountFlags    sampleCount,
             VkConservativeRasterizationModeEXT conservativeMode,
-            VkBool32              flatShading)
+            VkBool32              flatShading,
+            VkLineRasterizationModeEXT lineMode)
     : m_depthClipEnable (uint16_t(depthClipEnable)),
       m_depthBiasEnable (uint16_t(depthBiasEnable)),
       m_polygonMode     (uint16_t(polygonMode)),
       m_sampleCount     (uint16_t(sampleCount)),
       m_conservativeMode(uint16_t(conservativeMode)),
       m_flatShading     (uint16_t(flatShading)),
+      m_lineMode        (uint16_t(lineMode)),
       m_reserved        (0) { }
     
     VkBool32 depthClipEnable() const {
@@ -256,6 +258,10 @@ namespace dxvk {
       return VkBool32(m_flatShading);
     }
 
+    VkLineRasterizationModeEXT lineMode() const {
+      return VkLineRasterizationModeEXT(m_lineMode);
+    }
+
     bool eq(const DxvkRsInfo& other) const {
       return !std::memcmp(this, &other, sizeof(*this));
     }
@@ -268,7 +274,8 @@ namespace dxvk {
     uint16_t m_sampleCount            : 5;
     uint16_t m_conservativeMode       : 2;
     uint16_t m_flatShading            : 1;
-    uint16_t m_reserved               : 4;
+    uint16_t m_lineMode               : 2;
+    uint16_t m_reserved               : 2;
   
   };
 
@@ -393,14 +400,20 @@ namespace dxvk {
 
     DxvkDsStencilOp() = default;
 
-    DxvkDsStencilOp(VkStencilOpState state)
-    : m_failOp      (uint32_t(state.failOp)),
-      m_passOp      (uint32_t(state.passOp)),
-      m_depthFailOp (uint32_t(state.depthFailOp)),
-      m_compareOp   (uint32_t(state.compareOp)),
+    DxvkDsStencilOp(
+            VkStencilOp           failOp,
+            VkStencilOp           passOp,
+            VkStencilOp           depthFailOp,
+            VkCompareOp           compareOp,
+            uint8_t               compareMask,
+            uint8_t               writeMask)
+    : m_failOp      (uint32_t(failOp)),
+      m_passOp      (uint32_t(passOp)),
+      m_depthFailOp (uint32_t(depthFailOp)),
+      m_compareOp   (uint32_t(compareOp)),
       m_reserved    (0),
-      m_compareMask (uint32_t(state.compareMask)),
-      m_writeMask   (uint32_t(state.writeMask)) { }
+      m_compareMask (uint32_t(compareMask)),
+      m_writeMask   (uint32_t(writeMask)) { }
     
     VkStencilOpState state(bool write) const {
       VkStencilOpState result;
@@ -527,13 +540,15 @@ namespace dxvk {
     }
 
     static uint64_t encodeColorFormat(VkFormat format, uint32_t index) {
-      uint64_t value = uint64_t(format);
+      uint64_t value = 0u;
 
-      if (value >= uint64_t(VK_FORMAT_A4R4G4B4_UNORM_PACK16)) {
-        value -= uint64_t(VK_FORMAT_A4R4G4B4_UNORM_PACK16);
-        value += uint64_t(VK_FORMAT_E5B9G9R9_UFLOAT_PACK32) + 1;
-      } else if (value > uint64_t(VK_FORMAT_E5B9G9R9_UFLOAT_PACK32)) {
-        value = 0;
+      for (const auto& p : s_colorFormatRanges) {
+        if (format >= p.first && format <= p.second) {
+          value += uint32_t(format) - uint32_t(p.first);
+          break;
+        }
+
+        value += uint32_t(p.second) - uint32_t(p.first) + 1u;
       }
 
       return value << (7 * index);
@@ -554,13 +569,23 @@ namespace dxvk {
     static VkFormat decodeColorFormat(uint64_t value, uint32_t index) {
       value = (value >> (7 * index)) & 0x7F;
 
-      if (value > uint64_t(VK_FORMAT_E5B9G9R9_UFLOAT_PACK32)) {
-        value -= uint64_t(VK_FORMAT_E5B9G9R9_UFLOAT_PACK32) + 1ull;
-        value += uint64_t(VK_FORMAT_A4R4G4B4_UNORM_PACK16);
+      for (const auto& p : s_colorFormatRanges) {
+        uint32_t rangeSize = uint32_t(p.second) - uint32_t(p.first) + 1u;
+
+        if (value < rangeSize)
+          return VkFormat(uint32_t(p.first) + uint32_t(value));
+
+        value -= rangeSize;
       }
 
-      return VkFormat(value);
+      return VK_FORMAT_UNDEFINED;
     }
+
+    static constexpr std::array<std::pair<VkFormat, VkFormat>, 3> s_colorFormatRanges = {{
+      { VK_FORMAT_UNDEFINED,                  VK_FORMAT_E5B9G9R9_UFLOAT_PACK32  },  /*   0 - 123 */
+      { VK_FORMAT_A4R4G4B4_UNORM_PACK16,      VK_FORMAT_A4B4G4R4_UNORM_PACK16   },  /* 124 - 125 */
+      { VK_FORMAT_A1B5G5R5_UNORM_PACK16_KHR,  VK_FORMAT_A8_UNORM_KHR            },  /* 126 - 127 */
+    }};
 
   };
 

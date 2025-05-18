@@ -1,6 +1,8 @@
+#if defined(DXVK_WSI_GLFW)
+
 #include "../wsi_window.h"
 
-#include "native/wsi/native_wsi.h"
+#include "native/wsi/native_glfw.h"
 #include "wsi_platform_glfw.h"
 
 #include "../../util/util_string.h"
@@ -12,7 +14,7 @@
 
 namespace dxvk::wsi {
 
-  void getWindowSize(
+  void GlfwWsiDriver::getWindowSize(
       HWND hWindow,
       uint32_t* pWidth,
       uint32_t* pHeight) {
@@ -29,7 +31,7 @@ namespace dxvk::wsi {
   }
 
 
-  void resizeWindow(
+  void GlfwWsiDriver::resizeWindow(
       HWND hWindow,
       DxvkWindowState* pState,
       uint32_t Width,
@@ -40,9 +42,10 @@ namespace dxvk::wsi {
   }
 
 
-  bool setWindowMode(
+  bool GlfwWsiDriver::setWindowMode(
       HMONITOR hMonitor,
       HWND hWindow,
+      DxvkWindowState* pState,
       const WsiMode& pMode) {
     const int32_t displayId = fromHmonitor(hMonitor);
     GLFWwindow* window = fromHwnd(hWindow);
@@ -67,7 +70,7 @@ namespace dxvk::wsi {
     return true;
   }
 
-  bool enterFullscreenMode(
+  bool GlfwWsiDriver::enterFullscreenMode(
       HMONITOR hMonitor,
       HWND hWindow,
       DxvkWindowState* pState,
@@ -89,7 +92,7 @@ namespace dxvk::wsi {
   }
 
 
-  bool leaveFullscreenMode(
+  bool GlfwWsiDriver::leaveFullscreenMode(
       HWND hWindow,
       DxvkWindowState* pState,
       bool             restoreCoordinates) {
@@ -103,13 +106,13 @@ namespace dxvk::wsi {
   }
 
 
-  bool restoreDisplayMode() {
+  bool GlfwWsiDriver::restoreDisplayMode() {
     // Don't need to do anything with GLFW here.
     return true;
   }
 
 
-  HMONITOR getWindowMonitor(HWND hWindow) {
+  HMONITOR GlfwWsiDriver::getWindowMonitor(HWND hWindow) {
     // TODO: implement this with glfwGetWindowMonitor 
     //  (or maybe not? glfwGetWindowMonitor only seems to reference *fullscreen* windows)
     // GLFWwindow* window = fromHwnd(hWindow);
@@ -119,19 +122,31 @@ namespace dxvk::wsi {
   }
 
 
-  bool isWindow(HWND hWindow) {
+  bool GlfwWsiDriver::isWindow(HWND hWindow) {
     GLFWwindow* window = fromHwnd(hWindow);
     return window != nullptr;
   }
 
-  void updateFullscreenWindow(
+
+  bool GlfwWsiDriver::isMinimized(HWND hWindow) {
+    GLFWwindow* window = fromHwnd(hWindow);
+    return glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0;
+  }
+
+
+  bool GlfwWsiDriver::isOccluded(HWND hWindow) {
+    return false;
+  }
+
+
+  void GlfwWsiDriver::updateFullscreenWindow(
       HMONITOR hMonitor,
       HWND     hWindow,
       bool     forceTopmost) {
     // Don't need to do anything with GLFW here.
   }
 
-  VkResult createSurface(
+  VkResult GlfwWsiDriver::createSurface(
       HWND hWindow,
       PFN_vkGetInstanceProcAddr pfnVkGetInstanceProcAddr,
       VkInstance                instance,
@@ -142,3 +157,5 @@ namespace dxvk::wsi {
   }
 
 }
+
+#endif

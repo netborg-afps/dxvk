@@ -30,8 +30,10 @@ namespace dxvk {
     ExportsPosition,
     ExportsStencilRef,
     ExportsViewportIndexLayerFromVertexStage,
+    ExportsSampleMask,
     UsesFragmentCoverage,
     UsesSparseResidency,
+    TessellationPoints,
   };
 
   using DxvkShaderFlags = Flags<DxvkShaderFlag>;
@@ -51,17 +53,18 @@ namespace dxvk {
     /// Flat shading input mask
     uint32_t flatShadingInputs = 0;
     /// Push constant range
-    uint32_t pushConstOffset = 0;
+    VkShaderStageFlags pushConstStages = 0;
     uint32_t pushConstSize = 0;
-    /// Uniform buffer data
-    uint32_t uniformSize = 0;
-    const char* uniformData = nullptr;
     /// Rasterized stream, or -1
     int32_t xfbRasterizedStream = 0;
     /// Tess control patch vertex count
     uint32_t patchVertexCount = 0;
     /// Transform feedback vertex strides
     uint32_t xfbStrides[MaxNumXfbBuffers] = { };
+    /// Input primitive topology for geometry shaders
+    VkPrimitiveTopology inputTopology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
+    /// Output primitive topology
+    VkPrimitiveTopology outputTopology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
   };
 
 
@@ -72,6 +75,7 @@ namespace dxvk {
     bool      fsDualSrcBlend  = false;
     bool      fsFlatShading   = false;
     uint32_t  undefinedInputs = 0;
+    VkPrimitiveTopology inputTopology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
 
     std::array<VkComponentMapping, MaxNumRenderTargets> rtSwizzles = { };
 
@@ -263,7 +267,6 @@ namespace dxvk {
     uint32_t                      m_specConstantMask = 0;
     std::atomic<bool>             m_needsLibraryCompile = { true };
 
-    std::vector<char>             m_uniformData;
     std::vector<BindingOffsets>   m_bindingOffsets;
 
     DxvkBindingLayout             m_bindings;
@@ -280,6 +283,10 @@ namespace dxvk {
     static void emitFlatShadingDeclarations(
             SpirvCodeBuffer&          code,
             uint32_t                  inputMask);
+
+    static void patchInputTopology(
+            SpirvCodeBuffer&          code,
+            VkPrimitiveTopology       topology);
 
   };
   
@@ -362,26 +369,6 @@ namespace dxvk {
     std::array<VkPipelineShaderStageCreateInfo, 5>  m_stageInfos  = { };
     uint32_t                                        m_stageCount  = 0;
 
-  };
-
-
-  /**
-   * \brief Shader pipeline library compile args
-   */
-  struct DxvkShaderPipelineLibraryCompileArgs {
-    VkBool32 depthClipEnable = VK_TRUE;
-
-    bool operator == (const DxvkShaderPipelineLibraryCompileArgs& other) const {
-      return depthClipEnable == other.depthClipEnable;
-    }
-
-    bool operator != (const DxvkShaderPipelineLibraryCompileArgs& other) const {
-      return !this->operator == (other);
-    }
-
-    size_t hash() const {
-      return size_t(depthClipEnable);
-    }
   };
 
 
@@ -480,6 +467,17 @@ namespace dxvk {
 
 
   /**
+   * \brief Pipeline library handle
+   *
+   * Stores a pipeline library handle and the necessary link flags.
+   */
+  struct DxvkShaderPipelineLibraryHandle {
+    VkPipeline            handle;
+    VkPipelineCreateFlags linkFlags;
+  };
+
+
+  /**
    * \brief Shader pipeline library
    *
    * Stores a pipeline object for either a complete compute
@@ -518,11 +516,9 @@ namespace dxvk {
      * Either returns an already compiled pipeline library object, or
      * performs the compilation step if that has not happened yet.
      * Increments the use count by one.
-     * \param [in] args Compile arguments
      * \returns Vulkan pipeline handle
      */
-    VkPipeline acquirePipelineHandle(
-      const DxvkShaderPipelineLibraryCompileArgs& args);
+    DxvkShaderPipelineLibraryHandle acquirePipelineHandle();
 
     /**
      * \brief Releases pipeline
@@ -549,26 +545,22 @@ namespace dxvk {
           DxvkShaderSet             m_shaders;
     const DxvkBindingLayoutObjects* m_layout;
 
-    dxvk::mutex     m_mutex;
-    VkPipeline      m_pipeline             = VK_NULL_HANDLE;
-    VkPipeline      m_pipelineNoDepthClip  = VK_NULL_HANDLE;
-    uint32_t        m_useCount             = 0u;
-    bool            m_compiledOnce         = false;
+    dxvk::mutex                     m_mutex;
+    DxvkShaderPipelineLibraryHandle m_pipeline      = { VK_NULL_HANDLE, 0 };
+    uint32_t                        m_useCount      = 0u;
+    bool                            m_compiledOnce  = false;
 
-    dxvk::mutex                 m_identifierMutex;
-    DxvkShaderIdentifierSet     m_identifiers;
+    dxvk::mutex                     m_identifierMutex;
+    DxvkShaderIdentifierSet         m_identifiers;
 
-    void destroyShaderPipelinesLocked();
+    void destroyShaderPipelineLocked();
 
-    VkPipeline compileShaderPipelineLocked(
-      const DxvkShaderPipelineLibraryCompileArgs& args);
+    DxvkShaderPipelineLibraryHandle compileShaderPipelineLocked();
 
-    VkPipeline compileShaderPipeline(
-      const DxvkShaderPipelineLibraryCompileArgs& args,
+    DxvkShaderPipelineLibraryHandle compileShaderPipeline(
             VkPipelineCreateFlags                 flags);
 
     VkPipeline compileVertexShaderPipeline(
-      const DxvkShaderPipelineLibraryCompileArgs& args,
       const DxvkShaderStageInfo&          stageInfo,
             VkPipelineCreateFlags         flags);
 

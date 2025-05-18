@@ -28,6 +28,14 @@ namespace dxvk {
   
   struct D3D9ClipPlane {
     float coeff[4] = {};
+
+    bool operator == (const D3D9ClipPlane& other) {
+      return std::memcmp(this, &other, sizeof(D3D9ClipPlane)) == 0;
+    }
+
+    bool operator != (const D3D9ClipPlane& other) {
+      return !this->operator == (other);
+    }
   };
 
   struct D3D9RenderStateInfo {
@@ -73,24 +81,20 @@ namespace dxvk {
   };
 
   struct D3D9Light {
-    D3D9Light(const D3DLIGHT9& light, Matrix4 viewMtx) {
-      Diffuse  = Vector4(light.Diffuse.r,  light.Diffuse.g,  light.Diffuse.b,  light.Diffuse.a);
-      Specular = Vector4(light.Specular.r, light.Specular.g, light.Specular.b, light.Specular.a);
-      Ambient  = Vector4(light.Ambient.r,  light.Ambient.g,  light.Ambient.b,  light.Ambient.a);
-
-      Position  = viewMtx * Vector4(light.Position.x,  light.Position.y,  light.Position.z,  1.0f);
-      Direction = Vector4(light.Direction.x, light.Direction.y, light.Direction.z, 0.0f);
-      Direction = normalize(viewMtx * Direction);
-
-      Type         = light.Type;
-      Range        = light.Range;
-      Falloff      = light.Falloff;
-      Attenuation0 = light.Attenuation0;
-      Attenuation1 = light.Attenuation1;
-      Attenuation2 = light.Attenuation2;
-      Theta        = cosf(light.Theta / 2.0f);
-      Phi          = cosf(light.Phi / 2.0f);
-    }
+    D3D9Light(const D3DLIGHT9& light, Matrix4 viewMtx)
+      : Diffuse      ( Vector4(light.Diffuse.r,  light.Diffuse.g,  light.Diffuse.b,  light.Diffuse.a) )
+      , Specular     ( Vector4(light.Specular.r, light.Specular.g, light.Specular.b, light.Specular.a) )
+      , Ambient      ( Vector4(light.Ambient.r,  light.Ambient.g,  light.Ambient.b,  light.Ambient.a) )
+      , Position     ( viewMtx * Vector4(light.Position.x,  light.Position.y,  light.Position.z,  1.0f) )
+      , Direction    ( normalize(viewMtx * Vector4(light.Direction.x, light.Direction.y, light.Direction.z, 0.0f)) )
+      , Type         ( light.Type )
+      , Range        ( light.Range )
+      , Falloff      ( light.Falloff )
+      , Attenuation0 ( light.Attenuation0 )
+      , Attenuation1 ( light.Attenuation1 )
+      , Attenuation2 ( light.Attenuation2 )
+      , Theta        ( cosf(light.Theta / 2.0f) )
+      , Phi          ( cosf(light.Phi / 2.0f) ) { }
 
     Vector4 Diffuse;
     Vector4 Specular;
@@ -175,11 +179,11 @@ namespace dxvk {
 
   constexpr D3DLIGHT9 DefaultLight = {
     D3DLIGHT_DIRECTIONAL,     // Type
-    {1.0f, 1.0f, 1.0f, 1.0f}, // Diffuse
+    {1.0f, 1.0f, 1.0f, 0.0f}, // Diffuse
     {0.0f, 0.0f, 0.0f, 0.0f}, // Specular
     {0.0f, 0.0f, 0.0f, 0.0f}, // Ambient
     {0.0f, 0.0f, 0.0f},       // Position
-    {0.0f, 0.0f, 0.0f},       // Direction
+    {0.0f, 0.0f, 1.0f},       // Direction
     0.0f,                     // Range
     0.0f,                     // Falloff
     0.0f, 0.0f, 0.0f,         // Attenuations [constant, linear, quadratic]
@@ -201,7 +205,7 @@ namespace dxvk {
     const T* operator & () const { ensure(); return m_data.get(); }
           T* operator & ()       { ensure(); return m_data.get(); }
 
-    operator bool() { return m_data != nullptr; }
+    explicit operator bool() const { return m_data != nullptr; }
     operator T() { ensure(); return *m_data; }
 
     void ensure() const { if (!m_data) m_data = std::make_unique<T>(); }
@@ -219,7 +223,7 @@ namespace dxvk {
 
     T& operator=(const T& x) { m_data = x; return m_data; }
 
-    operator bool() { return true; }
+    explicit operator bool() const { return true; }
     operator T() { return m_data; }
 
     const T* operator -> () const { return &m_data; }
@@ -231,6 +235,31 @@ namespace dxvk {
     T& get() { return m_data; }
   private:
     T m_data;
+  };
+
+  struct D3D9SamplerInfo {
+    D3D9SamplerInfo(const std::array<DWORD, SamplerStateCount>& state)
+    : addressU(D3DTEXTUREADDRESS(state[D3DSAMP_ADDRESSU]))
+    , addressV(D3DTEXTUREADDRESS(state[D3DSAMP_ADDRESSV]))
+    , addressW(D3DTEXTUREADDRESS(state[D3DSAMP_ADDRESSW]))
+    , borderColor(D3DCOLOR(state[D3DSAMP_BORDERCOLOR]))
+    , magFilter(D3DTEXTUREFILTERTYPE(state[D3DSAMP_MAGFILTER]))
+    , minFilter(D3DTEXTUREFILTERTYPE(state[D3DSAMP_MINFILTER]))
+    , mipFilter(D3DTEXTUREFILTERTYPE(state[D3DSAMP_MIPFILTER]))
+    , mipLodBias(bit::cast<float>(state[D3DSAMP_MIPMAPLODBIAS]))
+    , maxMipLevel(state[D3DSAMP_MAXMIPLEVEL])
+    , maxAnisotropy(state[D3DSAMP_MAXANISOTROPY]) { }
+
+    D3DTEXTUREADDRESS addressU;
+    D3DTEXTUREADDRESS addressV;
+    D3DTEXTUREADDRESS addressW;
+    D3DCOLOR borderColor;
+    D3DTEXTUREFILTERTYPE magFilter;
+    D3DTEXTUREFILTERTYPE minFilter;
+    D3DTEXTUREFILTERTYPE mipFilter;
+    float mipLodBias;
+    DWORD maxMipLevel;
+    DWORD maxAnisotropy;
   };
 
   template <template <typename T> typename ItemType>
@@ -280,8 +309,8 @@ namespace dxvk {
     std::array<DWORD, caps::MaxEnabledLights>           enabledLightIndices;
 
     bool IsLightEnabled(DWORD Index) const {
-      const auto& indices = enabledLightIndices;
-      return std::find(indices.begin(), indices.end(), Index) != indices.end();
+      const auto& enabledIndices = enabledLightIndices;
+      return std::find(enabledIndices.begin(), enabledIndices.end(), Index) != enabledIndices.end();
     }
   };
 

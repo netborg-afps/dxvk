@@ -9,7 +9,6 @@
 #include "../dxso/dxso_isgn.h"
 
 #include <unordered_map>
-#include <bitset>
 
 namespace dxvk {
 
@@ -48,9 +47,14 @@ namespace dxvk {
   struct D3D9FixedFunctionOptions {
     D3D9FixedFunctionOptions(const D3D9Options* options);
 
-    bool invariantPosition;
-    bool forceSampleRateShading;
+    bool    invariantPosition;
+    bool    forceSampleRateShading;
+    int32_t drefScaling;
   };
+
+  constexpr float GetDrefScaleFactor(int32_t bitDepth) {
+    return 1.0f / (float(1 << bitDepth) - 1.0f);
+  }
 
   // Returns new oFog if VS
   // Returns new oColor if PS
@@ -59,7 +63,7 @@ namespace dxvk {
   void DoFixedFunctionAlphaTest(SpirvModule& spvModule, const D3D9AlphaTestContext& ctx);
 
   // Returns a render state block
-  uint32_t SetupRenderStateBlock(SpirvModule& spvModule, uint32_t count);
+  uint32_t SetupRenderStateBlock(SpirvModule& spvModule);
 
   struct D3D9PointSizeInfoVS {
     uint32_t defaultValue;
@@ -128,9 +132,11 @@ namespace dxvk {
         uint32_t VertexBlendCount   : 3;
 
         uint32_t VertexClipping     : 1;
+
+        uint32_t Projected : 8;
       } Contents;
 
-      uint32_t Primitive[4];
+      uint32_t Primitive[5];
     };
   };
 
@@ -163,6 +169,7 @@ namespace dxvk {
         uint32_t     Projected    : 1;
 
         uint32_t     ProjectedCount : 3;
+        uint32_t     SampleDref     : 1;
 
         uint32_t     TextureBound : 1;
 
@@ -244,6 +251,14 @@ namespace dxvk {
     D3D9FFShader GetShaderModule(
             D3D9DeviceEx*         pDevice,
       const D3D9FFShaderKeyFS&    ShaderKey);
+
+    UINT GetVSCount() const {
+      return m_vsModules.size();
+    }
+
+    UINT GetFSCount() const {
+      return m_fsModules.size();
+    }
 
   private:
 

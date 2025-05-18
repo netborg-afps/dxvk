@@ -7,6 +7,7 @@
 #include "../util/thread.h"
 
 #include "dxvk_cmdlist.h"
+#include "dxvk_latency.h"
 #include "dxvk_presenter.h"
 
 namespace dxvk {
@@ -43,8 +44,19 @@ namespace dxvk {
    */
   struct DxvkPresentInfo {
     Rc<Presenter>       presenter;
-    VkPresentModeKHR    presentMode;
     uint64_t            frameId;
+  };
+
+
+  /**
+   * \brief Latency info
+   *
+   * Optionally stores a latency tracker
+   * and the associated frame ID.
+   */
+  struct DxvkLatencyInfo {
+    Rc<DxvkLatencyTracker>  tracker;
+    uint64_t                frameId = 0;
   };
 
 
@@ -56,6 +68,8 @@ namespace dxvk {
     DxvkSubmitStatus*   status;
     DxvkSubmitInfo      submit;
     DxvkPresentInfo     present;
+    DxvkLatencyInfo     latency;
+    DxvkTimelineSemaphoreValues timelines;
   };
 
 
@@ -102,10 +116,12 @@ namespace dxvk {
      * dedicated submission thread. Use this to take
      * the submission overhead off the calling thread.
      * \param [in] submitInfo Submission parameters
+     * \param [in] latencyInfo Latency tracker info
      * \param [out] status Submission feedback
      */
     void submit(
             DxvkSubmitInfo      submitInfo,
+            DxvkLatencyInfo     latencyInfo,
             DxvkSubmitStatus*   status);
     
     /**
@@ -115,10 +131,12 @@ namespace dxvk {
      * and then presents the current swap chain image
      * of the presenter. May stall the calling thread.
      * \param [in] present Present parameters
+     * \param [in] latencyInfo Latency tracker info
      * \param [out] status Submission feedback
      */
     void present(
             DxvkPresentInfo     presentInfo,
+            DxvkLatencyInfo     latencyInfo,
             DxvkSubmitStatus*   status);
     
     /**
@@ -178,6 +196,9 @@ namespace dxvk {
 
     DxvkDevice*                 m_device;
     DxvkQueueCallback           m_callback;
+
+    DxvkTimelineSemaphores      m_semaphores;
+    DxvkTimelineSemaphoreValues m_timelines;
 
     std::atomic<VkResult>       m_lastError = { VK_SUCCESS };
     

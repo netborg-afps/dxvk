@@ -7,7 +7,6 @@
 #include "dxvk_bind_mask.h"
 #include "dxvk_graphics_state.h"
 #include "dxvk_pipelayout.h"
-#include "dxvk_resource.h"
 #include "dxvk_shader.h"
 #include "dxvk_stats.h"
 
@@ -120,7 +119,17 @@ namespace dxvk {
      */
     void compilePipeline(
       const DxvkComputePipelineStateInfo& state);
-    
+
+    /**
+     * \brief Debug name
+     *
+     * Consists of the compute shader's debug name.
+     * \returns Debug name
+     */
+    const char* debugName() const {
+      return m_debugName.c_str();
+    }
+
   private:
     
     DxvkDevice*                 m_device;    
@@ -133,6 +142,8 @@ namespace dxvk {
     DxvkComputePipelineShaders  m_shaders;
     DxvkBindingLayoutObjects*   m_bindings;
     
+    std::string                 m_debugName;
+
     alignas(CACHE_LINE_SIZE)
     dxvk::mutex                             m_mutex;
     sync::List<DxvkComputePipelineInstance> m_pipelines;
@@ -152,6 +163,8 @@ namespace dxvk {
     void logPipelineState(
             LogLevel                      level,
       const DxvkComputePipelineStateInfo& state) const;
+
+    std::string createDebugName() const;
 
   };
   

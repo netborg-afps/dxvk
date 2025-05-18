@@ -26,8 +26,28 @@ namespace dxvk {
     return id;
   }
 
+  /* First generation XeSS causes crash on proton for Intel due to missing
+   * Intel interface. Avoid crash by pretending to be non-Intel if the
+   * libxess.dll module is loaded by an application.
+   */
+  static bool isXessUsed() {
+#ifdef _WIN32
+      if (GetModuleHandleA("libxess") != nullptr ||
+          GetModuleHandleA("libxess_dx11") != nullptr)
+        return true;
+      else
+        return false;
+#else
+      return false;
+#endif
+  }
 
-  static bool isHDRDisallowed() {
+  static bool isNvapiEnabled() {
+    return env::getEnvVar("DXVK_ENABLE_NVAPI") == "1";
+  }
+
+
+  static bool isHDRDisallowed(bool enableUe4Workarounds) {
 #ifdef _WIN32
     // Unreal Engine 4 titles use AGS/NVAPI to try and enable
     // HDR globally.
@@ -50,10 +70,10 @@ namespace dxvk {
     // Luckily for us, they only load d3d12.dll on the D3D12 render path
     // so we can key off that to force disable HDR only in D3D11.
     std::string exeName = env::getExeName();
-    bool isUE4 = exeName.find("-Win64-Shipping") != std::string::npos;
+    bool isUE4 = enableUe4Workarounds || exeName.find("-Win64-Shipping") != std::string::npos;
     bool hasD3D12 = GetModuleHandleA("d3d12") != nullptr;
 
-    if (isUE4 && !hasD3D12)
+    if (isUE4 && !hasD3D12 && !isNvapiEnabled())
       return true;
 #endif
     return false;
@@ -65,22 +85,43 @@ namespace dxvk {
     this->customVendorId = parsePciId(config.getOption<std::string>("dxgi.customVendorId"));
     this->customDeviceId = parsePciId(config.getOption<std::string>("dxgi.customDeviceId"));
     this->customDeviceDesc = config.getOption<std::string>("dxgi.customDeviceDesc", "");
-
-    // Emulate a UMA device
-    this->emulateUMA = config.getOption<bool>("dxgi.emulateUMA", false);
     
     // Interpret the memory limits as Megabytes
     this->maxDeviceMemory = VkDeviceSize(config.getOption<int32_t>("dxgi.maxDeviceMemory", 0)) << 20;
     this->maxSharedMemory = VkDeviceSize(config.getOption<int32_t>("dxgi.maxSharedMemory", 0)) << 20;
 
-    // Force nvapiHack to be disabled if NvAPI is enabled in environment
-    if (env::getEnvVar("DXVK_ENABLE_NVAPI") == "1")
-      this->nvapiHack = false;
-    else
-      this->nvapiHack = config.getOption<bool>("dxgi.nvapiHack", true);
+    this->maxFrameRate = config.getOption<int32_t>("dxgi.maxFrameRate", 0);
+    this->syncInterval = config.getOption<int32_t>("dxgi.syncInterval", -1);
+
+    // We don't support dcomp swapchains and some games may rely on them failing on creation
+    this->enableDummyCompositionSwapchain = config.getOption<bool>("dxgi.enableDummyCompositionSwapchain", false);
+
+    // Expose Nvidia GPUs properly if NvAPI is enabled in environment
+    this->hideNvidiaGpu = !isNvapiEnabled();
+    applyTristate(this->hideNvidiaGpu, config.getOption<Tristate>("dxgi.hideNvidiaGpu", Tristate::Auto));
+
+    // Treat NVK adapters the same as Nvidia cards on the proprietary by
+    // default, but provide an override in case something isn't working.
+    this->hideNvkGpu = this->hideNvidiaGpu;
+    applyTristate(this->hideNvkGpu, config.getOption<Tristate>("dxgi.hideNvkGpu", Tristate::Auto));
+
+    // Expose AMD and Intel GPU by default, unless a config override is active.
+    // Implement as a tristate so that we have the option to introduce similar
+    // logic to Nvidia later, if necessary.
+    this->hideAmdGpu = config.getOption<Tristate>("dxgi.hideAmdGpu", Tristate::Auto) == Tristate::True;
+    this->hideIntelGpu = config.getOption<Tristate>("dxgi.hideIntelGpu", Tristate::Auto) == Tristate::True;
+
+    /* Force vendor ID to non-Intel ID when XeSS is in use */
+    if (isXessUsed()) {
+      Logger::info(str::format("Detected XeSS usage, hiding Intel GPU Vendor"));
+      this->hideIntelGpu = true;
+    }
 
     this->enableHDR = config.getOption<bool>("dxgi.enableHDR", env::getEnvVar("DXVK_HDR") == "1");
-    if (this->enableHDR && isHDRDisallowed()) {
+
+    bool enableUe4Workarounds = config.getOption<bool>("dxgi.enableUe4Workarounds", false);
+
+    if (this->enableHDR && isHDRDisallowed(enableUe4Workarounds)) {
       Logger::info("HDR was configured to be enabled, but has been force disabled as a UE4 DX11 game was detected.");
       this->enableHDR = false;
     }

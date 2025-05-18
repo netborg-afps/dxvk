@@ -115,6 +115,11 @@ namespace dxvk {
             UINT               OffsetInBytes,
             UINT               Stride);
 
+    HRESULT SetStreamSourceWithoutOffset(
+            UINT               StreamNumber,
+            D3D9VertexBuffer*  pStreamData,
+            UINT               Stride);
+
     HRESULT SetStreamSourceFreq(UINT StreamNumber, UINT Setting);
 
     HRESULT SetStateTexture(DWORD StateSampler, IDirect3DBaseTexture9* pTexture);
@@ -135,8 +140,6 @@ namespace dxvk {
             DWORD                      Stage,
             D3D9TextureStageStateTypes Type,
             DWORD                      Value);
-
-    HRESULT MultiplyStateTransform(uint32_t idx, const D3DMATRIX* pMatrix);
 
     HRESULT SetViewport(const D3DVIEWPORT9* pViewport);
 
@@ -181,7 +184,7 @@ namespace dxvk {
       Capture
     };
 
-    template <typename Dst, typename Src>
+    template <typename Dst, typename Src, bool IgnoreStreamOffset>
     void ApplyOrCapture(Dst* dst, const Src* src) {
       if (m_captures.flags.test(D3D9CapturedStateFlag::StreamFreq)) {
         for (uint32_t idx : bit::BitMask(m_captures.streamFreq.dword(0)))
@@ -211,11 +214,19 @@ namespace dxvk {
       if (m_captures.flags.test(D3D9CapturedStateFlag::VertexBuffers)) {
         for (uint32_t idx : bit::BitMask(m_captures.vertexBuffers.dword(0))) {
           const auto& vbo = src->vertexBuffers[idx];
-          dst->SetStreamSource(
-            idx,
-            vbo.vertexBuffer.ptr(),
-            vbo.offset,
-            vbo.stride);
+          if constexpr (!IgnoreStreamOffset) {
+            dst->SetStreamSource(
+              idx,
+              vbo.vertexBuffer.ptr(),
+              vbo.offset,
+              vbo.stride);
+          } else {
+            // For whatever reason, D3D9 doesn't capture the stream offset
+            dst->SetStreamSourceWithoutOffset(
+              idx,
+              vbo.vertexBuffer.ptr(),
+              vbo.stride);
+          }
         }
       }
 
@@ -266,7 +277,7 @@ namespace dxvk {
           for (uint32_t consts : bit::BitMask(m_captures.vsConsts.fConsts.dword(i))) {
             uint32_t idx = i * 32 + consts;
 
-            dst->SetVertexShaderConstantF(idx, (float*)&src->vsConsts->fConsts[idx], 1);
+            dst->SetVertexShaderConstantF(idx, reinterpret_cast<const float*>(&src->vsConsts->fConsts[idx]), 1);
           }
         }
 
@@ -274,7 +285,7 @@ namespace dxvk {
           for (uint32_t consts : bit::BitMask(m_captures.vsConsts.iConsts.dword(i))) {
             uint32_t idx = i * 32 + consts;
 
-            dst->SetVertexShaderConstantI(idx, (int*)&src->vsConsts->iConsts[idx], 1);
+            dst->SetVertexShaderConstantI(idx, reinterpret_cast<const int*>(&src->vsConsts->iConsts[idx]), 1);
           }
         }
 
@@ -289,7 +300,7 @@ namespace dxvk {
           for (uint32_t consts : bit::BitMask(m_captures.psConsts.fConsts.dword(i))) {
             uint32_t idx = i * 32 + consts;
 
-            dst->SetPixelShaderConstantF(idx, (float*)&src->psConsts->fConsts[idx], 1);
+            dst->SetPixelShaderConstantF(idx, reinterpret_cast<const float*>(&src->psConsts->fConsts[idx]), 1);
           }
         }
 
@@ -297,7 +308,7 @@ namespace dxvk {
           for (uint32_t consts : bit::BitMask(m_captures.psConsts.iConsts.dword(i))) {
             uint32_t idx = i * 32 + consts;
 
-            dst->SetPixelShaderConstantI(idx, (int*)&src->psConsts->iConsts[idx], 1);
+            dst->SetPixelShaderConstantI(idx, reinterpret_cast<const int*>(&src->psConsts->iConsts[idx]), 1);
           }
         }
 
@@ -324,12 +335,12 @@ namespace dxvk {
       }
     }
 
-    template <D3D9StateFunction Func>
+    template <D3D9StateFunction Func, bool IgnoreStreamOffset>
     void ApplyOrCapture() {
       if      constexpr (Func == D3D9StateFunction::Apply)
-        ApplyOrCapture(m_parent, &m_state);
+        ApplyOrCapture<D3D9DeviceEx, D3D9CapturableState, IgnoreStreamOffset>(m_parent, &m_state);
       else if constexpr (Func == D3D9StateFunction::Capture)
-        ApplyOrCapture(this, m_deviceState);
+        ApplyOrCapture<D3D9StateBlock, D3D9DeviceState, IgnoreStreamOffset>(this, m_deviceState);
     }
 
     template <
@@ -377,10 +388,6 @@ namespace dxvk {
     HRESULT SetVertexBoolBitfield(uint32_t idx, uint32_t mask, uint32_t bits);
     HRESULT SetPixelBoolBitfield (uint32_t idx, uint32_t mask, uint32_t bits);
 
-    inline bool IsApplying() {
-      return m_applying;
-    }
-
   private:
 
     void CapturePixelRenderStates();
@@ -396,9 +403,7 @@ namespace dxvk {
     D3D9CapturableState  m_state;
     D3D9StateCaptures    m_captures;
 
-    D3D9DeviceState* m_deviceState;
-
-    bool                 m_applying = false;
+    D3D9DeviceState*     m_deviceState;
 
   };
 

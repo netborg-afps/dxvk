@@ -9,33 +9,74 @@ namespace dxvk {
     DxvkOptions(const Config& config);
 
     /// Enable debug utils
-    bool enableDebugUtils;
+    bool enableDebugUtils = false;
 
     /// Enable state cache
-    bool enableStateCache;
+    bool enableStateCache = true;
+
+    /// Enable memory defragmentation
+    Tristate enableMemoryDefrag = Tristate::Auto;
 
     /// Number of compiler threads
     /// when using the state cache
-    int32_t numCompilerThreads;
+    int32_t numCompilerThreads = 0;
 
     /// Enable graphics pipeline library
-    Tristate enableGraphicsPipelineLibrary;
+    Tristate enableGraphicsPipelineLibrary = Tristate::Auto;
 
     /// Enables pipeline lifetime tracking
-    Tristate trackPipelineLifetime;
+    Tristate trackPipelineLifetime = Tristate::Auto;
 
     /// Shader-related options
-    Tristate useRawSsbo;
-
-    /// Maximum memory chunk size in MiB
-    int32_t maxChunkSize;
+    Tristate useRawSsbo = Tristate::Auto;
 
     /// HUD elements
     std::string hud;
 
     /// Forces swap chain into MAILBOX (if true)
     /// or FIFO_RELAXED (if false) present mode
-    Tristate tearFree;
+    Tristate tearFree = Tristate::Auto;
+
+    /// Enables latency sleep
+    /// Defaults to false in this build to activate the FramePacer,
+    /// especially for the case when the game doesn't support Reflex
+    Tristate latencySleep = Tristate::False;
+
+    /// Latency tolerance, in microseconds
+    int32_t latencyTolerance = 0u;
+
+    /// Disable VK_NV_low_latency2. This extension
+    /// appears to be all sorts of broken on 32-bit.
+    Tristate disableNvLowLatency2 = Tristate::Auto;
+
+    // Hides integrated GPUs if dedicated GPUs are
+    // present. May be necessary for some games that
+    // incorrectly assume monitor layouts.
+    bool hideIntegratedGraphics = false;
+
+    /// Clears all mapped memory to zero.
+    bool zeroMappedMemory = false;
+
+    /// Allows full-screen exclusive mode on Windows
+    bool allowFse = false;
+
+    /// Whether to enable tiler optimizations
+    Tristate tilerMode = Tristate::Auto;
+
+    /// Frame pacing
+    std::string framePace;
+
+    /// A value in microseconds to fine-tune the low-latency frame pacing.
+    /// Positive values make a frame begin later which might improve responsiveness.
+    /// Negative values make a frame begin earlier which might improve fps.
+    int32_t lowLatencyOffset;
+
+    /// Determines whether a frame is allowed to begin before finishing processing
+    /// the cpu-part of the previous one, when low-latency frame pacing is used.
+    bool lowLatencyAllowCpuFramesOverlap;
+
+    // Device name
+    std::string deviceFilter;
   };
 
 }

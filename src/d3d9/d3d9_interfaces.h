@@ -31,10 +31,30 @@ ID3D9VkInteropInterface : public IUnknown {
 };
 
 /**
+ * \brief D3D9 interface for Vulkan interop - extended
+ *
+ * Provides access to the instance extension lists
+ * and everything provided by ID3D9VkInteropInterface
+ */
+MIDL_INTERFACE("d6589ed4-7a37-4096-bac2-223b25ae31d2")
+ID3D9VkInteropInterface1 : public ID3D9VkInteropInterface {
+  /**
+   * \brief Gets a list of enabled instance extensions
+   * 
+   * \param [out] pExtensionCount Number of extensions
+   * \param [out] ppExtensions List of extension names
+   * \returns D3DERR_MOREDATA if the list was truncated
+   */
+  virtual HRESULT STDMETHODCALLTYPE GetInstanceExtensions(
+          UINT*                       pExtensionCount,
+    const char**                      ppExtensions) = 0;
+};
+
+/**
  * \brief D3D9 texture interface for Vulkan interop
  * 
- * Provides access to the backing resource of a
- * D3D9 texture.
+ * Provides access to the backing image of a
+ * D3D9 texture, surface, or volume.
  */
 MIDL_INTERFACE("d56344f5-8d35-46fd-806d-94c351b472c1")
 ID3D9VkInteropTexture : public IUnknown {
@@ -72,6 +92,27 @@ ID3D9VkInteropTexture : public IUnknown {
           VkImage*              pHandle,
           VkImageLayout*        pLayout,
           VkImageCreateInfo*    pInfo) = 0;
+};
+
+
+/**
+ * \brief D3D9 image description
+ */
+struct D3D9VkExtImageDesc {
+  D3DRESOURCETYPE     Type;               // Can be SURFACE, TEXTURE, CUBETEXTURE, VOLUMETEXTURE
+  UINT                Width;
+  UINT                Height;
+  UINT                Depth;              // Can be > 1 for VOLUMETEXTURE
+  UINT                MipLevels;          // Can be > 1 for TEXTURE, CUBETEXTURE, VOLUMETEXTURE
+  DWORD               Usage;
+  D3DFORMAT           Format;
+  D3DPOOL             Pool;
+  D3DMULTISAMPLE_TYPE MultiSample;        // Must be NONE unless Type is SURFACE
+  DWORD               MultiSampleQuality;
+  bool                Discard;            // Depth stencils only
+  bool                IsAttachmentOnly;   // If false, then VK_IMAGE_USAGE_SAMPLED_BIT will be added
+  bool                IsLockable;
+  VkImageUsageFlags   ImageUsage;         // Additional image usage flags
 };
 
 /**
@@ -194,6 +235,17 @@ ID3D9VkInteropDevice : public IUnknown {
   virtual bool STDMETHODCALLTYPE WaitForResource(
           IDirect3DResource9*  pResource,
           DWORD                MapFlags) = 0;
+
+  /**
+   * \brief Creates a custom image/surface/texture
+   * 
+   * \param [in] desc Image description
+   * \param [out, retval] ppResult Pointer to a resource of the D3DRESOURCETYPE given by desc.Type
+   * \returns D3D_OK, D3DERR_INVALIDCALL, or D3DERR_OUTOFVIDEOMEMORY
+   */
+  virtual HRESULT STDMETHODCALLTYPE CreateImage(
+          const D3D9VkExtImageDesc* desc,
+          IDirect3DResource9**      ppResult) = 0;
 };
 
 /**
@@ -229,13 +281,9 @@ ID3D9VkExtSwapchain : public IUnknown {
   virtual void STDMETHODCALLTYPE UnlockAdditionalFormats() = 0;
 };
 
-#ifdef _MSC_VER
-struct __declspec(uuid("3461a81b-ce41-485b-b6b5-fcf08ba6a6bd")) ID3D9VkInteropInterface;
-struct __declspec(uuid("d56344f5-8d35-46fd-806d-94c351b472c1")) ID3D9VkInteropTexture;
-struct __declspec(uuid("2eaa4b89-0107-4bdb-87f7-0f541c493ce0")) ID3D9VkInteropDevice;
-struct __declspec(uuid("13776e93-4aa9-430a-a4ec-fe9e281181d5")) ID3D9VkExtSwapchain;
-#else
+#ifndef _MSC_VER
 __CRT_UUID_DECL(ID3D9VkInteropInterface,   0x3461a81b,0xce41,0x485b,0xb6,0xb5,0xfc,0xf0,0x8b,0xa6,0xa6,0xbd);
+__CRT_UUID_DECL(ID3D9VkInteropInterface1,  0xd6589ed4,0x7a37,0x4096,0xba,0xc2,0x22,0x3b,0x25,0xae,0x31,0xd2);
 __CRT_UUID_DECL(ID3D9VkInteropTexture,     0xd56344f5,0x8d35,0x46fd,0x80,0x6d,0x94,0xc3,0x51,0xb4,0x72,0xc1);
 __CRT_UUID_DECL(ID3D9VkInteropDevice,      0x2eaa4b89,0x0107,0x4bdb,0x87,0xf7,0x0f,0x54,0x1c,0x49,0x3c,0xe0);
 __CRT_UUID_DECL(ID3D9VkExtSwapchain,       0x13776e93,0x4aa9,0x430a,0xa4,0xec,0xfe,0x9e,0x28,0x11,0x81,0xd5);

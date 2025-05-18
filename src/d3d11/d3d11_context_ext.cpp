@@ -48,12 +48,15 @@ namespace dxvk {
     D3D10DeviceLock lock = m_ctx->LockContext();
     m_ctx->SetDrawBuffers(pBufferForArgs, nullptr);
     
+    if (unlikely(m_ctx->HasDirtyGraphicsBindings()))
+      m_ctx->ApplyDirtyGraphicsBindings();
+
     m_ctx->EmitCs([
       cCount  = DrawCount,
       cOffset = ByteOffsetForArgs,
       cStride = ByteStrideForArgs
     ] (DxvkContext* ctx) {
-      ctx->drawIndirect(cOffset, cCount, cStride);
+      ctx->drawIndirect(cOffset, cCount, cStride, false);
     });
   }
   
@@ -67,12 +70,15 @@ namespace dxvk {
     D3D10DeviceLock lock = m_ctx->LockContext();
     m_ctx->SetDrawBuffers(pBufferForArgs, nullptr);
     
+    if (unlikely(m_ctx->HasDirtyGraphicsBindings()))
+      m_ctx->ApplyDirtyGraphicsBindings();
+
     m_ctx->EmitCs([
       cCount  = DrawCount,
       cOffset = ByteOffsetForArgs,
       cStride = ByteStrideForArgs
     ] (DxvkContext* ctx) {
-      ctx->drawIndexedIndirect(cOffset, cCount, cStride);
+      ctx->drawIndexedIndirect(cOffset, cCount, cStride, false);
     });
   }
   
@@ -87,6 +93,9 @@ namespace dxvk {
           UINT                    ByteStrideForArgs) {
     D3D10DeviceLock lock = m_ctx->LockContext();
     m_ctx->SetDrawBuffers(pBufferForArgs, pBufferForCount);
+
+    if (unlikely(m_ctx->HasDirtyGraphicsBindings()))
+      m_ctx->ApplyDirtyGraphicsBindings();
 
     m_ctx->EmitCs([
       cMaxCount  = MaxDrawCount,
@@ -109,6 +118,9 @@ namespace dxvk {
           UINT                    ByteStrideForArgs) {
     D3D10DeviceLock lock = m_ctx->LockContext();
     m_ctx->SetDrawBuffers(pBufferForArgs, pBufferForCount);
+
+    if (unlikely(m_ctx->HasDirtyGraphicsBindings()))
+      m_ctx->ApplyDirtyGraphicsBindings();
 
     m_ctx->EmitCs([
       cMaxCount  = MaxDrawCount,
@@ -143,13 +155,13 @@ namespace dxvk {
   void STDMETHODCALLTYPE D3D11DeviceContextExt<ContextType>::SetBarrierControl(
           UINT                    ControlFlags) {
     D3D10DeviceLock lock = m_ctx->LockContext();
-    DxvkBarrierControlFlags flags;
-    
-    if (ControlFlags & D3D11_VK_BARRIER_CONTROL_IGNORE_WRITE_AFTER_WRITE)
-      flags.set(DxvkBarrierControl::IgnoreWriteAfterWrite);
+    D3D11Device* parent = static_cast<D3D11Device*>(m_ctx->GetParentInterface());
+    DxvkBarrierControlFlags flags = parent->GetOptionsBarrierControlFlags();
 
-    if (ControlFlags & D3D11_VK_BARRIER_CONTROL_IGNORE_GRAPHICS_UAV)
-      flags.set(DxvkBarrierControl::IgnoreGraphicsBarriers);
+    if (ControlFlags & D3D11_VK_BARRIER_CONTROL_IGNORE_WRITE_AFTER_WRITE) {
+      flags.set(DxvkBarrierControl::ComputeAllowReadWriteOverlap,
+                DxvkBarrierControl::GraphicsAllowReadWriteOverlap);
+    }
 
     m_ctx->EmitCs([cFlags = flags] (DxvkContext* ctx) {
       ctx->setBarrierControl(cFlags);

@@ -9,6 +9,9 @@
 #define VULKAN_FN(name) \
   ::PFN_ ## name name = reinterpret_cast<::PFN_ ## name>(sym(#name))
 
+using PFN_wine_vkAcquireKeyedMutex = VkResult (VKAPI_PTR *)(VkDevice device, VkDeviceMemory memory, uint64_t key, uint32_t timeout_ms);
+using PFN_wine_vkReleaseKeyedMutex = VkResult (VKAPI_PTR *)(VkDevice device, VkDeviceMemory memory, uint64_t key);
+
 namespace dxvk::vk {
 
   /**
@@ -195,8 +198,10 @@ namespace dxvk::vk {
     VULKAN_FN(vkBindImageMemory);
     VULKAN_FN(vkGetBufferMemoryRequirements);
     VULKAN_FN(vkGetBufferMemoryRequirements2);
+    VULKAN_FN(vkGetDeviceBufferMemoryRequirements);
     VULKAN_FN(vkGetImageMemoryRequirements);
     VULKAN_FN(vkGetImageMemoryRequirements2);
+    VULKAN_FN(vkGetDeviceImageMemoryRequirements);
     VULKAN_FN(vkGetImageSparseMemoryRequirements);
     VULKAN_FN(vkGetImageSparseMemoryRequirements2);
     VULKAN_FN(vkQueueBindSparse);
@@ -383,6 +388,7 @@ namespace dxvk::vk {
     VULKAN_FN(vkCmdSetConservativeRasterizationModeEXT);
     VULKAN_FN(vkCmdSetExtraPrimitiveOverestimationSizeEXT);
     VULKAN_FN(vkCmdSetDepthClipEnableEXT);
+    VULKAN_FN(vkCmdSetLineRasterizationModeEXT);
     #endif
 
     #ifdef VK_EXT_full_screen_exclusive
@@ -393,6 +399,15 @@ namespace dxvk::vk {
 
     #ifdef VK_EXT_hdr_metadata
     VULKAN_FN(vkSetHdrMetadataEXT);
+    #endif
+
+    #ifdef VK_EXT_pageable_device_local_memory
+    VULKAN_FN(vkSetDeviceMemoryPriorityEXT);
+    #endif
+
+    #ifdef VK_EXT_multi_draw
+    VULKAN_FN(vkCmdDrawMultiEXT);
+    VULKAN_FN(vkCmdDrawMultiIndexedEXT);
     #endif
 
     #ifdef VK_EXT_shader_module_identifier
@@ -432,8 +447,29 @@ namespace dxvk::vk {
     VULKAN_FN(vkImportSemaphoreWin32HandleKHR);
     #endif
 
-    #ifdef VK_KHR_PRESENT_WAIT_EXTENSION_NAME
+    #ifdef VK_KHR_maintenance5
+    VULKAN_FN(vkCmdBindIndexBuffer2KHR);
+    VULKAN_FN(vkGetRenderingAreaGranularityKHR);
+    VULKAN_FN(vkGetDeviceImageSubresourceLayoutKHR);
+    VULKAN_FN(vkGetImageSubresourceLayout2KHR);
+    #endif
+
+    #ifdef VK_KHR_present_wait
     VULKAN_FN(vkWaitForPresentKHR);
+    #endif
+
+    #ifdef VK_KHR_win32_keyed_mutex
+    // Wine additions to actually use this extension.
+    VULKAN_FN(wine_vkAcquireKeyedMutex);
+    VULKAN_FN(wine_vkReleaseKeyedMutex);
+    #endif
+
+    #ifdef VK_NV_low_latency2
+    VULKAN_FN(vkSetLatencySleepModeNV);
+    VULKAN_FN(vkLatencySleepNV);
+    VULKAN_FN(vkSetLatencyMarkerNV);
+    VULKAN_FN(vkGetLatencyTimingsNV);
+    VULKAN_FN(vkQueueNotifyOutOfBandNV);
     #endif
   };
   

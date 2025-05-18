@@ -7,9 +7,11 @@ namespace dxvk {
 
   D3D9Volume::D3D9Volume(
           D3D9DeviceEx*             pDevice,
-    const D3D9_COMMON_TEXTURE_DESC* pDesc)
+    const D3D9_COMMON_TEXTURE_DESC* pDesc,
+    const bool                      Extended)
     : D3D9VolumeBase(
         pDevice,
+        Extended,
         new D3D9CommonTexture( pDevice, this, pDesc, D3DRTYPE_VOLUMETEXTURE, nullptr ),
         0, 0,
         nullptr,
@@ -18,12 +20,14 @@ namespace dxvk {
 
   D3D9Volume::D3D9Volume(
           D3D9DeviceEx*             pDevice,
+    const bool                      Extended,
           D3D9CommonTexture*        pTexture,
           UINT                      Face,
           UINT                      MipLevel,
           IDirect3DBaseTexture9*    pContainer)
     : D3D9VolumeBase(
         pDevice,
+        Extended,
         pTexture,
         Face, MipLevel,
         pContainer,
@@ -65,6 +69,11 @@ namespace dxvk {
       return S_OK;
     }
 
+    if (riid == __uuidof(ID3D9VkInteropTexture)) {
+      *ppvObject = ref(m_texture->GetVkInterop());
+      return S_OK;
+    }
+
     if (logQueryInterfaceError(__uuidof(IDirect3DVolume9), riid)) {
       Logger::warn("D3D9Volume::QueryInterface: Unknown interface query");
       Logger::warn(str::format(riid));
@@ -97,12 +106,41 @@ namespace dxvk {
     if (unlikely(pLockedBox == nullptr))
       return D3DERR_INVALIDCALL;
 
-    return m_parent->LockImage(
+    // LockBox clears any existing content present in pLockedBox
+    pLockedBox->pBits = nullptr;
+    pLockedBox->RowPitch = 0;
+    pLockedBox->SlicePitch = 0;
+
+    if (unlikely(pBox != nullptr)) {
+      auto& desc = *(m_texture->Desc());
+
+      // Negative or zero length dimensions
+      if ( static_cast<LONG>(pBox->Right)  - static_cast<LONG>(pBox->Left)  <= 0
+        || static_cast<LONG>(pBox->Bottom) - static_cast<LONG>(pBox->Top)   <= 0
+        || static_cast<LONG>(pBox->Back)   - static_cast<LONG>(pBox->Front) <= 0
+      // Exceeding surface dimensions
+        || pBox->Right  > std::max(1u, desc.Width  >> m_mipLevel)
+        || pBox->Bottom > std::max(1u, desc.Height >> m_mipLevel)
+        || pBox->Back   > std::max(1u, desc.Depth  >> m_mipLevel))
+        return D3DERR_INVALIDCALL;
+    }
+
+    D3DLOCKED_BOX lockedBox;
+
+    HRESULT hr = m_parent->LockImage(
       m_texture,
       m_face, m_mipLevel,
-      pLockedBox,
+      &lockedBox,
       pBox,
       Flags);
+
+    if (FAILED(hr)) return hr;
+
+    pLockedBox->pBits      = lockedBox.pBits;
+    pLockedBox->RowPitch   = lockedBox.RowPitch;
+    pLockedBox->SlicePitch = lockedBox.SlicePitch;
+
+    return hr;
   }
 
 

@@ -57,7 +57,19 @@ namespace dxvk {
     uint32_t transfer;
     uint32_t sparse;
   };
-  
+
+
+  /**
+   * \brief Adapter memory statistics
+   *
+   * Periodically updated by the devices using this adapter.
+   */
+  struct DxvkAdapterMemoryStats {
+    std::atomic<uint64_t> allocated = { 0u };
+    std::atomic<uint64_t> used = { 0u };
+  };
+
+
   /**
    * \brief Device import info
    */
@@ -228,22 +240,13 @@ namespace dxvk {
      * 
      * Updates memory alloc info accordingly.
      * \param [in] heap Memory heap index
-     * \param [in] bytes Allocation size
+     * \param [in] allocated Allocated size delta
+     * \param [in] used Used size delta
      */
-    void notifyMemoryAlloc(
+    void notifyMemoryStats(
             uint32_t            heap,
-            int64_t             bytes);
-    
-    /**
-     * \brief Registers memory suballocation
-     * 
-     * Updates memory alloc info accordingly.
-     * \param [in] heap Memory heap index
-     * \param [in] bytes Allocation size
-     */
-    void notifyMemoryUse(
-            uint32_t            heap,
-            int64_t             bytes);
+            int64_t             allocated,
+            int64_t             used);
     
     /**
      * \brief Tests if the driver matches certain criteria
@@ -255,8 +258,17 @@ namespace dxvk {
      */
     bool matchesDriver(
             VkDriverIdKHR       driver,
-            uint32_t            minVer,
-            uint32_t            maxVer) const;
+            Version             minVer,
+            Version             maxVer) const;
+
+    /**
+     * \brief Tests if the driver matches certain criteria
+     *
+     * \param [in] driver Driver ID
+     * \returns \c True if the driver matches these criteria
+     */
+    bool matchesDriver(
+            VkDriverIdKHR       driver) const;
     
     /**
      * \brief Logs DXVK adapter info
@@ -319,8 +331,7 @@ namespace dxvk {
 
     std::vector<VkQueueFamilyProperties> m_queueFamilies;
 
-    std::array<std::atomic<uint64_t>, VK_MAX_MEMORY_HEAPS> m_memoryAllocated = { };
-    std::array<std::atomic<uint64_t>, VK_MAX_MEMORY_HEAPS> m_memoryUsed = { };
+    std::array<DxvkAdapterMemoryStats, VK_MAX_MEMORY_HEAPS> m_memoryStats = { };
 
     void queryExtensions();
     void queryDeviceInfo();
@@ -343,6 +354,8 @@ namespace dxvk {
     static void logFeatures(const DxvkDeviceFeatures& features);
     static void logQueueFamilies(const DxvkAdapterQueueIndices& queues);
     
+    static Version decodeDriverVersion(VkDriverId driverId, uint32_t version);
+
   };
   
 }

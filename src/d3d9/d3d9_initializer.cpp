@@ -1,27 +1,27 @@
 #include <cstring>
 
 #include "d3d9_initializer.h"
+#include "d3d9_device.h"
 
 namespace dxvk {
 
   D3D9Initializer::D3D9Initializer(
-    const Rc<DxvkDevice>&             Device)
-  : m_device(Device), m_context(m_device->createContext(DxvkContextType::Supplementary)) {
-    m_context->beginRecording(
-      m_device->createCommandList());
+    D3D9DeviceEx*             pParent)
+  : m_parent(pParent),
+    m_device(pParent->GetDXVKDevice()),
+    m_csChunk(m_parent->AllocCsChunk()) {
+
   }
 
-  
+
   D3D9Initializer::~D3D9Initializer() {
 
   }
 
 
-  void D3D9Initializer::Flush() {
+  void D3D9Initializer::NotifyContextFlush() {
     std::lock_guard<dxvk::mutex> lock(m_mutex);
-
-    if (m_transferCommands != 0)
-      FlushInternal();
+    m_transferCommands = 0;
   }
 
 
@@ -36,7 +36,7 @@ namespace dxvk {
     if (pBuffer->GetMapMode() == D3D9_COMMON_BUFFER_MAP_MODE_BUFFER)
       InitHostVisibleBuffer(pBuffer->GetBufferSlice<D3D9_COMMON_BUFFER_TYPE_STAGING>());
   }
-  
+
 
   void D3D9Initializer::InitTexture(
           D3D9CommonTexture* pTexture,
@@ -44,11 +44,23 @@ namespace dxvk {
     if (pTexture->GetMapMode() == D3D9_COMMON_TEXTURE_MAP_MODE_NONE)
       return;
 
+    void* mapPtr = nullptr;
+
+    if (pTexture->Desc()->Pool != D3DPOOL_DEFAULT) {
+      mapPtr = pTexture->GetData(0);
+      if (mapPtr == nullptr)
+        throw DxvkError("D3D9: InitTexture: map failed");
+    }
+
     if (pTexture->GetImage() != nullptr)
       InitDeviceLocalTexture(pTexture);
 
-    if (pTexture->Desc()->Pool != D3DPOOL_DEFAULT)
-      InitHostVisibleTexture(pTexture, pInitialData);
+    if (mapPtr != nullptr) {
+      InitHostVisibleTexture(pTexture, pInitialData, mapPtr);
+      pTexture->UnmapData();
+    }
+
+    SyncSharedTexture(pTexture);
   }
 
 
@@ -58,10 +70,14 @@ namespace dxvk {
 
     m_transferCommands += 1;
 
-    m_context->initBuffer(
-      Slice.buffer());
+    EmitCs([
+      cBuffer = Slice.buffer()
+    ] (DxvkContext* ctx) {
+      ctx->initBuffer(
+        cBuffer);
+    });
 
-    FlushImplicit();
+    ThrottleAllocationLocked();
   }
 
 
@@ -80,40 +96,25 @@ namespace dxvk {
           D3D9CommonTexture* pTexture) {
     std::lock_guard<dxvk::mutex> lock(m_mutex);
 
-    auto InitImage = [&](Rc<DxvkImage> image) {
-      if (image == nullptr)
-        return;
+    Rc<DxvkImage> image = pTexture->GetImage();
 
-      auto formatInfo = lookupFormatInfo(image->info().format);
+    EmitCs([
+      cImage = std::move(image)
+    ] (DxvkContext* ctx) {
+      ctx->initImage(cImage, VK_IMAGE_LAYOUT_UNDEFINED);
+    });
 
-      m_transferCommands += 1;
-      
-      // While the Microsoft docs state that resource contents are
-      // undefined if no initial data is provided, some applications
-      // expect a resource to be pre-cleared.
-      VkImageSubresourceRange subresources;
-      subresources.aspectMask     = formatInfo->aspectMask;
-      subresources.baseMipLevel   = 0;
-      subresources.levelCount     = image->info().mipLevels;
-      subresources.baseArrayLayer = 0;
-      subresources.layerCount     = image->info().numLayers;
-
-      m_context->initImage(image, subresources, VK_IMAGE_LAYOUT_UNDEFINED);
-    };
-
-    InitImage(pTexture->GetImage());
-
-    FlushImplicit();
+    ThrottleAllocationLocked();
   }
 
 
   void D3D9Initializer::InitHostVisibleTexture(
           D3D9CommonTexture* pTexture,
-          void*              pInitialData) {
+          void*              pInitialData,
+          void*              mapPtr) {
     // If the buffer is mapped, we can write data directly
     // to the mapped memory region instead of doing it on
     // the GPU. Same goes for zero-initialization.
-    void* mapPtr = pTexture->GetData(0);
     if (pInitialData) {
       // Initial data is only supported for textures with 1 subresource
       VkExtent3D mipExtent = pTexture->GetExtentMip(0);
@@ -141,22 +142,49 @@ namespace dxvk {
         mapPtr, 0,
         pTexture->GetTotalSize());
     }
-    pTexture->UnmapData();
   }
 
 
-  void D3D9Initializer::FlushImplicit() {
-    if (m_transferCommands > MaxTransferCommands
-     || m_transferMemory   > MaxTransferMemory)
-      FlushInternal();
+  void D3D9Initializer::ThrottleAllocationLocked() {
+    if (m_transferCommands > MaxTransferCommands)
+      ExecuteFlushLocked();
   }
 
 
-  void D3D9Initializer::FlushInternal() {
-    m_context->flushCommandList(nullptr);
-    
+  void D3D9Initializer::ExecuteFlush() {
+    std::lock_guard lock(m_mutex);
+
+    ExecuteFlushLocked();
+  }
+
+
+  void D3D9Initializer::ExecuteFlushLocked() {
+    EmitCs([] (DxvkContext* ctx) {
+      ctx->flushCommandList(nullptr, nullptr);
+    });
+
+    FlushCsChunk();
+
     m_transferCommands = 0;
-    m_transferMemory   = 0;
+  }
+
+
+  void D3D9Initializer::SyncSharedTexture(D3D9CommonTexture* pResource) {
+    if (pResource->GetImage() == nullptr || pResource->GetImage()->info().sharing.mode == DxvkSharedHandleMode::None)
+      return;
+
+    // Ensure that initialization commands are submitted and waited on before
+    // returning control to the application in order to avoid race conditions
+    // in case the texture is used immediately on a secondary device.
+    ExecuteFlush();
+
+    m_device->waitForResource(*pResource->GetImage(), DxvkAccess::Write);
+  }
+
+
+  void D3D9Initializer::FlushCsChunkLocked() {
+    m_parent->InjectCsChunk(std::move(m_csChunk), false);
+    m_csChunk = m_parent->AllocCsChunk();
   }
 
 }

@@ -147,6 +147,12 @@ namespace dxvk {
     VkFormat             FormatSrgb     = VK_FORMAT_UNDEFINED;
   };
 
+  struct D3D9_FORMAT_BLOCK_SIZE {
+    uint8_t            Width  = 0;
+    uint8_t            Height = 0;
+    uint8_t            Depth  = 0;
+  };
+
   /**
    * \brief Format mapping
    * 
@@ -170,6 +176,8 @@ namespace dxvk {
   };
 
   D3D9_VK_FORMAT_MAPPING ConvertFormatUnfixed(D3D9Format Format);
+
+  D3D9_FORMAT_BLOCK_SIZE GetFormatAlignedBlockSize(D3D9Format Format);
 
   /**
    * \brief Format table
@@ -217,7 +225,7 @@ namespace dxvk {
 
     bool m_dfSupport;
     bool m_x4r4g4b4Support;
-    bool m_d32supportFinal;
+    bool m_d16lockableSupport;
   };
 
   inline bool IsFourCCFormat(D3D9Format format) {
@@ -230,12 +238,33 @@ namespace dxvk {
       && format != D3D9Format::MULTI2_ARGB8
       && format != D3D9Format::UYVY
       && format != D3D9Format::R8G8_B8G8
+      && format != D3D9Format::YUY2
       && format != D3D9Format::G8R8_G8B8
       && format != D3D9Format::DXT1
       && format != D3D9Format::DXT2
       && format != D3D9Format::DXT3
       && format != D3D9Format::DXT4
       && format != D3D9Format::DXT5;
+  }
+
+  inline bool IsDXTFormat(D3D9Format format) {
+    return format == D3D9Format::DXT1
+        || format == D3D9Format::DXT2
+        || format == D3D9Format::DXT3
+        || format == D3D9Format::DXT4
+        || format == D3D9Format::DXT5;
+  }
+
+  // D3D9 documentation says: IDirect3DSurface9::GetDC is valid on the following formats only:
+  // D3DFMT_R5G6B5, D3DFMT_X1R5G5B5, D3DFMT_R8G8B8, and D3DFMT_X8R8G8B8. However,
+  // the equivalent formats of D3DFMT_A1R5G5B5 and D3DFMT_A8R8G8B8 are also supported.
+  inline bool IsSurfaceGetDCCompatibleFormat(D3D9Format format) {
+    return format == D3D9Format::R5G6B5
+        || format == D3D9Format::X1R5G5B5
+        || format == D3D9Format::A1R5G5B5
+        || format == D3D9Format::R8G8B8
+        || format == D3D9Format::X8R8G8B8
+        || format == D3D9Format::A8R8G8B8;
   }
 
 }

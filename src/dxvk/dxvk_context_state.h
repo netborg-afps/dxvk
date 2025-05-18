@@ -20,9 +20,12 @@ namespace dxvk {
    * of the graphics and compute pipelines
    * has changed and/or needs to be updated.
    */
-  enum class DxvkContextFlag : uint32_t  {
+  enum class DxvkContextFlag : uint64_t  {
     GpRenderPassBound,          ///< Render pass is currently bound
     GpRenderPassSuspended,      ///< Render pass is currently suspended
+    GpRenderPassSecondaryCmd,   ///< Render pass uses secondary command buffer
+    GpRenderPassSideEffects,    ///< Render pass has side effects
+    GpRenderPassNeedsFlush,     ///< Render pass has pending resolves or discards
     GpXfbActive,                ///< Transform feedback is enabled
     GpDirtyFramebuffer,         ///< Framebuffer binding is out of date
     GpDirtyPipeline,            ///< Graphics pipeline binding is out of date
@@ -48,14 +51,20 @@ namespace dxvk {
     GpDynamicRasterizerState,   ///< Cull mode and front face are dynamic
     GpDynamicVertexStrides,     ///< Vertex buffer strides are dynamic
     GpIndependentSets,          ///< Graphics pipeline layout was created with independent sets
-    
+
     CpDirtyPipelineState,       ///< Compute pipeline is out of date
     CpDirtySpecConstants,       ///< Compute spec constants are out of date
-    
+
     DirtyDrawBuffer,            ///< Indirect argument buffer is dirty
     DirtyPushConstants,         ///< Push constant data has changed
+
+    ForceWriteAfterWriteSync,   ///< Ignores barrier control flags for write-after-write hazards
+
+    Count
   };
-  
+
+  static_assert(uint32_t(DxvkContextFlag::Count) <= 64u);
+
   using DxvkContextFlags = Flags<DxvkContextFlag>;
 
 
@@ -65,6 +74,9 @@ namespace dxvk {
   enum class DxvkContextFeature : uint32_t {
     TrackGraphicsPipeline,
     VariableMultisampleRate,
+    IndexBufferRobustness,
+    DebugUtils,
+    DirectMultiDraw,
     FeatureCount
   };
 
@@ -78,8 +90,11 @@ namespace dxvk {
    * synchronize implicitly.
    */
   enum class DxvkBarrierControl : uint32_t {
-    IgnoreWriteAfterWrite       = 1,
-    IgnoreGraphicsBarriers      = 2,
+    // Ignores write-after-write hazard
+    ComputeAllowWriteOnlyOverlap  = 0,
+    ComputeAllowReadWriteOverlap  = 1,
+
+    GraphicsAllowReadWriteOverlap = 2,
   };
 
   using DxvkBarrierControlFlags  = Flags<DxvkBarrierControl>;
@@ -99,8 +114,14 @@ namespace dxvk {
     std::array<uint32_t,        DxvkLimits::MaxNumVertexBindings> vertexStrides = { };
     std::array<uint32_t,        DxvkLimits::MaxNumVertexBindings> vertexExtents = { };
   };
-  
-  
+
+
+  struct DxvkViewport {
+    VkViewport viewport = { };
+    VkRect2D   scissor  = { };
+  };
+
+
   struct DxvkViewportState {
     uint32_t viewportCount = 0;
     std::array<VkViewport, DxvkLimits::MaxNumViewports> viewports    = { };
@@ -109,9 +130,11 @@ namespace dxvk {
 
 
   struct DxvkOutputMergerState {
+    DxvkRenderingInfo   renderingInfo;
     DxvkRenderTargets   renderTargets;
     DxvkRenderPassOps   renderPassOps;
     DxvkFramebufferInfo framebufferInfo;
+    DxvkAttachmentMask  attachmentMask;
   };
 
 
@@ -123,6 +146,7 @@ namespace dxvk {
   struct DxvkXfbState {
     std::array<DxvkBufferSlice, MaxNumXfbBuffers> buffers;
     std::array<DxvkBufferSlice, MaxNumXfbBuffers> counters;
+    std::array<DxvkBufferSlice, MaxNumXfbBuffers> activeCounters;
   };
   
   
@@ -168,6 +192,14 @@ namespace dxvk {
   };
   
   
+  struct DxvkDeferredResolve {
+    Rc<DxvkImageView> imageView;
+    uint32_t layerMask;
+    VkResolveModeFlagBits depthMode;
+    VkResolveModeFlagBits stencilMode;
+  };
+
+
   /**
    * \brief Pipeline state
    * 

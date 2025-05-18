@@ -1,6 +1,12 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <type_traits>
+#include <utility>
+
+#include "util_bit.h"
+#include "util_likely.h"
 
 namespace dxvk {
 
@@ -13,8 +19,72 @@ namespace dxvk {
 
     small_vector() { }
 
-    small_vector             (const small_vector&) = delete;
-    small_vector& operator = (const small_vector&) = delete;
+    small_vector(size_t size) {
+      resize(size);
+    }
+
+    small_vector(const small_vector& other) {
+      reserve(other.m_size);
+
+      for (size_t i = 0; i < other.m_size; i++)
+        *ptr(i) = *other.ptr(i);
+
+      m_size = other.m_size;
+    }
+
+    small_vector& operator = (const small_vector& other) {
+      for (size_t i = 0; i < m_size; i++)
+        ptr(i)->~T();
+
+      reserve(other.m_size);
+
+      for (size_t i = 0; i < other.m_size; i++)
+        *ptr(i) = *other.ptr(i);
+
+      m_size = other.m_size;
+      return *this;
+    }
+
+    small_vector(small_vector&& other) {
+      if (other.m_size <= N) {
+        for (size_t i = 0; i < other.m_size; i++)
+          new (&u.m_data[i]) T(std::move(*other.ptr(i)));
+      } else {
+        u.m_ptr = other.u.m_ptr;
+        m_capacity = other.m_capacity;
+
+        other.u.m_ptr = nullptr;
+        other.m_capacity = N;
+      }
+
+      m_size = other.m_size;
+      other.m_size = 0;
+    }
+
+    small_vector& operator = (small_vector&& other) {
+      for (size_t i = 0; i < m_size; i++)
+        ptr(i)->~T();
+
+      if (m_capacity > N)
+        delete[] u.m_ptr;
+
+      if (other.m_size <= N) {
+        m_capacity = N;
+
+        for (size_t i = 0; i < other.m_size; i++)
+          new (&u.m_data[i]) T(std::move(*other.ptr(i)));
+      } else {
+        u.m_ptr = other.u.m_ptr;
+        m_capacity = other.m_capacity;
+
+        other.u.m_ptr = nullptr;
+        other.m_capacity = N;
+      }
+
+      m_size = other.m_size;
+      other.m_size = 0;
+      return *this;
+    }
 
     ~small_vector() {
       for (size_t i = 0; i < m_size; i++)
@@ -23,16 +93,16 @@ namespace dxvk {
       if (m_capacity > N)
         delete[] u.m_ptr;
     }
-    
+
     size_t size() const {
       return m_size;
     }
 
     void reserve(size_t n) {
-      n = pick_capacity(n);
-
-      if (n <= m_capacity)
+      if (likely(n <= m_capacity))
         return;
+
+      n = pick_capacity(n);
 
       storage* data = new storage[n];
 
@@ -43,7 +113,7 @@ namespace dxvk {
 
       if (m_capacity > N)
         delete[] u.m_ptr;
-      
+
       m_capacity = n;
       u.m_ptr = data;
     }
@@ -56,7 +126,7 @@ namespace dxvk {
 
       for (size_t i = n; i < m_size; i++)
         ptr(i)->~T();
-      
+
       for (size_t i = m_size; i < n; i++)
         new (ptr(i)) T();
 
@@ -74,9 +144,9 @@ namespace dxvk {
     }
 
     template<typename... Args>
-    void emplace_back(Args... args) {
+    T& emplace_back(Args... args) {
       reserve(m_size + 1);
-      new (ptr(m_size++)) T(std::forward<Args>(args)...);
+      return *(new (ptr(m_size++)) T(std::forward<Args>(args)...));
     }
 
     void erase(size_t idx) {
@@ -123,12 +193,8 @@ namespace dxvk {
     } u;
 
     size_t pick_capacity(size_t n) {
-      size_t capacity = m_capacity;
-
-      while (capacity < n)
-        capacity *= 2;
-
-      return capacity;
+      // Pick next largest power of two for the new capacity
+      return size_t(1u) << ((sizeof(n) * 8u) - bit::lzcnt(n - 1));
     }
 
     T* ptr(size_t idx) {
