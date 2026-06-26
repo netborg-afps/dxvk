@@ -1,3 +1,6 @@
+#include <optional>
+#include <utility>
+
 #include <dxbc/dxbc_container.h>
 #include <dxbc/dxbc_interface.h>
 #include <dxbc/dxbc_parser.h>
@@ -56,6 +59,8 @@ namespace dxvk {
       } else {
         if (!converter.convertShader(builder))
           throw DxvkError(str::format("Failed to convert shader: ", m_key.toString()));
+
+        lowerBuiltIns(builder);
       }
     }
 
@@ -98,8 +103,107 @@ namespace dxvk {
 
     bool                    m_lowerIcb = false;
 
-  };
+    struct BuiltInInfo {
+      dxbc_spv::ir::BuiltIn builtIn;
+      dxbc_spv::ir::BasicType type;
+      const char* name;
+    };
 
+    static void lowerBuiltIns(dxbc_spv::ir::Builder& builder) {
+      using namespace dxbc_spv;
+
+      // Nothing to do for compute, our speshul built-ins are
+      // only used in graphics pipelines.
+      auto [entryPoint, shaderStage] = findEntryPoint(builder);
+
+      ir::SsaDef pushData = {};
+      ir::SsaDef specSampleCount = {};
+
+      switch (shaderStage) {
+        case ir::ShaderStage::eHull: {
+          pushData = builder.add(ir::Op::DclPushData(
+            ir::ScalarType::eF32, entryPoint, 0u, shaderStage));
+          builder.add(ir::Op::DebugName(pushData, "maxTessFactor"));
+        } break;
+
+        case ir::ShaderStage::ePixel: {
+          specSampleCount = builder.add(ir::Op::DclSpecConstant(
+            ir::ScalarType::eU32, entryPoint, 0u, 0u));
+          builder.add(ir::Op::DebugName(specSampleCount, "vRasterizer"));
+        } break;
+
+        default:
+          return;
+      }
+
+      // Gather built-in inputs
+      small_vector<ir::SsaDef, 32u> inputs;
+
+      for (auto iter = builder.getDeclarations().first;
+                iter != builder.getDeclarations().second; iter++) {
+        if (iter->getOpCode() == ir::OpCode::eDclInputBuiltIn)
+          inputs.push_back(iter->getDef());
+      }
+
+      // Rewrite input loads as push data loads
+      for (auto inputDef : inputs) {
+        const auto& inputOp = builder.getOp(inputDef);
+
+        auto builtIn = ir::BuiltIn(inputOp.getOperand(inputOp.getFirstLiteralOperandIndex()));
+
+        switch (builtIn) {
+          case ir::BuiltIn::eSampleCount: {
+            dxbc_spv_assert(specSampleCount);
+            rewriteBuiltIn(builder, inputDef, specSampleCount);
+          } break;
+
+          case ir::BuiltIn::eTessFactorLimit: {
+            dxbc_spv_assert(pushData);
+            rewriteBuiltIn(builder, inputDef, pushData);
+          } break;
+
+          default:
+            break;
+        }
+      }
+    }
+
+    static void rewriteBuiltIn(dxbc_spv::ir::Builder& builder, dxbc_spv::ir::SsaDef oldDef, dxbc_spv::ir::SsaDef newDef) {
+      using namespace dxbc_spv;
+
+      small_vector<ir::SsaDef, 32u> uses;
+      builder.getUses(oldDef, uses);
+
+      const auto& newOp = builder.getOp(newDef);
+
+      for (auto use : uses) {
+        const auto& useOp = builder.getOp(use);
+
+        if (useOp.getOpCode() == ir::OpCode::eInputLoad) {
+          if (newOp.getOpCode() == ir::OpCode::eDclPushData) {
+            auto loadType = useOp.getType().getBaseType(0u);
+            builder.rewriteOp(use, ir::Op::PushDataLoad(loadType, newDef, ir::SsaDef()));
+          } else {
+            builder.rewriteDef(use, newDef);
+          }
+        }
+      }
+    }
+
+    static std::pair<dxbc_spv::ir::SsaDef, dxbc_spv::ir::ShaderStage> findEntryPoint(dxbc_spv::ir::Builder& builder) {
+      using namespace dxbc_spv;
+
+      auto [a, b] = builder.getDeclarations();
+
+      for (auto iter = a; iter != b; iter++) {
+        if (iter->getOpCode() == ir::OpCode::eEntryPoint)
+          return std::make_pair(iter->getDef(), ir::ShaderStage(iter->getOperand(iter->getFirstLiteralOperandIndex())));
+      }
+
+      return {};
+    }
+
+  };
 
 
   
@@ -231,20 +335,16 @@ namespace dxvk {
     const D3D11ShaderIcbInfo&     Icb,
     const D3D11BindingMask&       BindingMask,
           D3D11CommonShader*      pShader) {
-    // Use the shader's unique key for the lookup
-    { std::unique_lock<dxvk::mutex> lock(m_mutex);
-      
-      auto entry = m_modules.find(ShaderKey);
-      if (entry != m_modules.end()) {
-        *pShader = entry->second;
-        return S_OK;
-      }
+    std::unique_lock<dxvk::mutex> lock(m_mutex);
+
+    auto entry = m_modules.find(ShaderKey);
+    if (entry != m_modules.end()) {
+      *pShader = entry->second;
+      return S_OK;
     }
-    
-    // This shader has not been compiled yet, so we have to create a
-    // new module. This takes a while, so we won't lock the structure.
+
     D3D11CommonShader module;
-    
+
     try {
       module = D3D11CommonShader(pDevice, pLinkage, ShaderKey,
         ModuleInfo, pShaderBytecode, BytecodeLength, Icb, BindingMask);
@@ -252,20 +352,8 @@ namespace dxvk {
       Logger::err(e.message());
       return E_INVALIDARG;
     }
-    
-    // Insert the new module into the lookup table. If another thread
-    // has compiled the same shader in the meantime, we should return
-    // that object instead and discard the newly created module.
-    { std::unique_lock<dxvk::mutex> lock(m_mutex);
-      
-      auto status = m_modules.insert({ ShaderKey, module });
 
-      if (!status.second) {
-        *pShader = status.first->second;
-        return S_OK;
-      }
-    }
-    
+    m_modules.insert({ ShaderKey, module });
     *pShader = std::move(module);
     return S_OK;
   }

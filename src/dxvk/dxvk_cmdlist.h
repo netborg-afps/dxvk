@@ -401,7 +401,8 @@ namespace dxvk {
      * \param [in] value Value to wait for
      */
     void waitFence(Rc<DxvkFence> fence, uint64_t value) {
-      m_waitSemaphores.emplace_back(std::move(fence), value);
+      if (fence->getValue() < value)
+        m_waitSemaphores.emplace_back(std::move(fence), value);
     }
     
     /**
@@ -477,6 +478,17 @@ namespace dxvk {
      */
     DxvkResourceBufferInfo allocateDescriptors(const DxvkDescriptorSetLayout* layout) const {
       return m_descriptorRange->alloc(layout->getMemorySize());
+    }
+
+    /**
+     * \brief Allocates storage for spec constant data
+     *
+     * The same restrictions as for allocateDescriptors apply.
+     * \param [in] layout Pipeline layout
+     * \returns Allocated descriptor heap range
+     */
+    DxvkResourceBufferInfo allocateSpecData(const DxvkPipelineLayout* layout) {
+      return m_descriptorRange->alloc(layout->getSpecDataMemorySize());
     }
 
     /**
@@ -601,40 +613,18 @@ namespace dxvk {
     
     void cmdBindDescriptorSets(
             DxvkCmdBuffer             cmdBuffer,
-            VkPipelineBindPoint       pipeline,
-            VkPipelineLayout          pipelineLayout,
-            uint32_t                  firstSet,
-            uint32_t                  descriptorSetCount,
-      const VkDescriptorSet*          descriptorSets) {
-      m_vkd->vkCmdBindDescriptorSets(getCmdBuffer(cmdBuffer),
-        pipeline, pipelineLayout, firstSet, descriptorSetCount,
-        descriptorSets, 0, nullptr);
+      const VkBindDescriptorSetsInfo* info) {
+      m_vkd->vkCmdBindDescriptorSets2KHR(getCmdBuffer(cmdBuffer), info);
     }
 
 
     void cmdSetDescriptorBufferOffsetsEXT(
             DxvkCmdBuffer             cmdBuffer,
-            VkPipelineBindPoint       pipeline,
-            VkPipelineLayout          layout,
-            uint32_t                  firstSet,
-            uint32_t                  setCount,
-      const uint32_t*                 pBufferIndices,
-      const VkDeviceSize*             pOffsets) {
-      m_vkd->vkCmdSetDescriptorBufferOffsetsEXT(getCmdBuffer(cmdBuffer),
-        pipeline, layout, firstSet, setCount, pBufferIndices, pOffsets);
+      const VkSetDescriptorBufferOffsetsInfoEXT* info) {
+      m_vkd->vkCmdSetDescriptorBufferOffsets2EXT(getCmdBuffer(cmdBuffer), info);
     }
 
 
-
-    void cmdBindIndexBuffer(
-            VkBuffer                buffer,
-            VkDeviceSize            offset,
-            VkIndexType             indexType) {
-      m_vkd->vkCmdBindIndexBuffer(getCmdBuffer(),
-        buffer, offset, indexType);
-    }
-    
-    
     void cmdBindIndexBuffer2(
             VkBuffer                buffer,
             VkDeviceSize            offset,
@@ -965,13 +955,8 @@ namespace dxvk {
 
     void cmdPushConstants(
             DxvkCmdBuffer           cmdBuffer,
-            VkPipelineLayout        layout,
-            VkShaderStageFlags      stageFlags,
-            uint32_t                offset,
-            uint32_t                size,
-      const void*                   pValues) {
-      m_vkd->vkCmdPushConstants(getCmdBuffer(cmdBuffer),
-        layout, stageFlags, offset, size, pValues);
+      const VkPushConstantsInfo*    info) {
+      m_vkd->vkCmdPushConstants2KHR(getCmdBuffer(cmdBuffer), info);
     }
 
 
@@ -1267,13 +1252,19 @@ namespace dxvk {
       m_descriptorSync = std::move(syncHandle);
     }
 
-    void ensureDescriptorHeapBinding() {
-      if (unlikely(m_descriptorHeapInvalidated)) {
-        this->rebindSamplerHeap();
-        this->rebindResourceHeap();
+    bool ensureDescriptorHeapBinding() {
+      if (likely(!m_descriptorHeapInvalidated))
+        return true;
 
-        m_descriptorHeapInvalidated = false;
-      }
+      // Can't rebind inside secondaries
+      if (unlikely(m_execBuffer))
+        return false;
+
+      this->rebindSamplerHeap();
+      this->rebindResourceHeap();
+
+      m_descriptorHeapInvalidated = false;
+      return true;
     }
 
     void invalidateDescriptorHeapBinding() {

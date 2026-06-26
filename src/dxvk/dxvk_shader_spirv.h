@@ -4,6 +4,8 @@
 
 #include "dxvk_shader.h"
 
+#include "../spirv/spirv_code_buffer.h"
+
 namespace dxvk {
 
   /**
@@ -20,6 +22,8 @@ namespace dxvk {
     DxvkPushDataBlock localPushData;
     /// Descriptor set and binding of global sampler heap
     DxvkShaderBinding samplerHeap;
+    /// Descriptor set and binding of spec constant UBO
+    DxvkShaderBinding specDataBuffer;
     /// Rasterized stream, or -1
     int32_t xfbRasterizedStream = 0;
     /// Tess control patch vertex count
@@ -114,7 +118,7 @@ namespace dxvk {
 
     DxvkSpirvShaderCreateInfo     m_info  = { };
 
-    SpirvCompressedBuffer         m_code;
+    SpirvCodeBuffer               m_code;
     DxvkPipelineLayoutBuilder     m_layout;
 
     std::string                   m_debugName;
@@ -123,16 +127,13 @@ namespace dxvk {
     DxvkShaderMetadata            m_metadata = { };
 
     std::unordered_multimap<uint32_t, DxvkSpirvDecorations> m_decorations = { };
-    std::unordered_map<uint32_t, uint32_t> m_idToOffset = { };
-
-    void gatherIdOffsets(
-            SpirvCodeBuffer&          code);
 
     void gatherMetadata(
             SpirvCodeBuffer&          code);
 
     void handleIoVariable(
             SpirvCodeBuffer&          code,
+      const std::unordered_map<uint32_t, uint32_t>& idToOffset,
       const SpirvInstruction&         type,
             spv::StorageClass         storage,
             uint32_t                  varId,
@@ -146,6 +147,7 @@ namespace dxvk {
 
     void handleDebugName(
             SpirvCodeBuffer&          code,
+      const std::unordered_map<uint32_t, uint32_t>& idToOffset,
             uint32_t                  stringId);
 
     const DxvkSpirvDecorations& getDecoration(
@@ -154,6 +156,7 @@ namespace dxvk {
 
     std::pair<uint32_t, uint32_t> getComponentCountForType(
             SpirvCodeBuffer&          code,
+      const std::unordered_map<uint32_t, uint32_t>& idToOffset,
       const SpirvInstruction&         type,
             spv::BuiltIn              builtIn) const;
 
@@ -161,6 +164,18 @@ namespace dxvk {
             SpirvCodeBuffer&          code,
       const DxvkShaderBindingMap*     bindings,
       const DxvkShaderLinkage*        linkage) const;
+
+    void lowerSpecDataBufferToConstants(
+            SpirvCodeBuffer&          code,
+      const DxvkShaderBinding&        binding) const;
+
+    static bool removeVariableFromEntryPoint(
+            SpirvCodeBuffer&          code,
+            SpirvInstruction&         entryPoint,
+            uint32_t                  varId);
+
+    static std::unordered_map<uint32_t, uint32_t> gatherIdOffsets(
+            SpirvCodeBuffer&          code);
 
     static VkShaderStageFlagBits getShaderStage(
             SpirvCodeBuffer&          code);

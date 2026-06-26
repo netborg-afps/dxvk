@@ -15,8 +15,10 @@ namespace dxvk {
 
 
   bool DxvkShaderLinkage::eq(const DxvkShaderLinkage& other) const {
-    bool eq = fsDualSrcBlend == other.fsDualSrcBlend
-           && fsFlatShading == other.fsFlatShading;
+    bool eq = fsDualSrcBlend  == other.fsDualSrcBlend
+           && fsFlatShading   == other.fsFlatShading
+           && sampleLocations == other.sampleLocations
+           && semanticIo      == other.semanticIo;
 
     if (eq) {
       eq = prevStageOutputs.getVarCount() == other.prevStageOutputs.getVarCount();
@@ -40,6 +42,8 @@ namespace dxvk {
     DxvkHashState hash;
     hash.add(uint32_t(fsDualSrcBlend));
     hash.add(uint32_t(fsFlatShading));
+    hash.add(uint32_t(sampleLocations));
+    hash.add(uint32_t(semanticIo));
 
     for (uint32_t i = 0; i < prevStageOutputs.getVarCount(); i++)
       hash.add(prevStageOutputs.getVar(i).hash());
@@ -153,6 +157,9 @@ namespace dxvk {
 
   bool DxvkShaderPipelineLibraryKey::eq(
     const DxvkShaderPipelineLibraryKey& other) const {
+    if (m_shaders.size() != other.m_shaders.size())
+      return false;
+
     bool eq = true;
 
     for (uint32_t i = 0; i < m_shaders.size() && eq; i++)
@@ -745,13 +752,11 @@ namespace dxvk {
     if (needsPosition && !metadata.flags.test(DxvkShaderFlag::ExportsPosition))
       return false;
 
-    // Spec constant selectors are only supported in graphics
-    if (metadata.specConstantMask & (1u << MaxNumSpecConstants))
-      return metadata.stage != VK_SHADER_STAGE_COMPUTE_BIT;
+    // Dynamic spec constants are only supported in graphics
+    if (metadata.specConstantMask && metadata.stage == VK_SHADER_STAGE_COMPUTE_BIT)
+      return false;
 
-    // Always late-compile shaders with spec constants
-    // that don't use the spec constant selector
-    return !metadata.specConstantMask;
+    return true;
   }
 
 

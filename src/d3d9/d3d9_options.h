@@ -5,10 +5,10 @@
 
 namespace dxvk {
 
-  enum class D3D9FloatEmulation {
-    Disabled,
-    Enabled,
-    Strict
+  enum class D3D9FloatEmulation : uint8_t {
+    Disabled = 0,
+    Enabled  = 1,
+    Strict   = 2
   };
 
   struct D3D9Options {
@@ -73,6 +73,12 @@ namespace dxvk {
     /// D3D9 Floating Point Emulation (anything * 0 = 0)
     D3D9FloatEmulation d3d9FloatEmulation;
 
+    /// Whether shaders use FP16 for partial precision instructions
+    bool useFP16;
+
+    /// Support depth formats for cube textures
+    bool supportCubeDepthFormats;
+
     /// Support the DF16 & DF24 texture format
     bool supportDFFormats;
 
@@ -117,10 +123,16 @@ namespace dxvk {
     bool cachedWriteOnlyBuffers;
 
     /// Use device local memory for constant buffers.
-    bool deviceLocalConstantBuffers;
+    Tristate deviceLocalConstantBuffers;
 
     /// Disable direct buffer mapping
     bool allowDirectBufferMapping;
+
+    /// Force flushing D3DPOOL_DEFAULT buffers at draw time rather than on unlock
+    /// Used to work around game bugs in source engine games like CSGO and Insurgency.
+    /// Those games write to buffers after unlocking them. Uploading on unlock leads to black
+    /// objects because they never get their proper UVs.
+    bool forceDrawTimeBufferUpload;
 
     /// Don't use non seamless cube maps
     bool seamlessCubes;
@@ -155,12 +167,6 @@ namespace dxvk {
 
     /// Add an extra front buffer to make GetFrontBufferData() work correctly when the swapchain only has a single buffer
     bool extraFrontbuffer;
-
-    /// Use the uber shader for fixed function vertex shaders.
-    bool ffUbershaderVS;
-
-    /// Use the uber shader for fixed function fragment shaders.
-    bool ffUbershaderFS;
   };
 
 }

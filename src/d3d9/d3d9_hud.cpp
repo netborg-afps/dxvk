@@ -47,42 +47,16 @@ namespace dxvk::hud {
     return position;
   }
 
-  HudFixedFunctionShaders::HudFixedFunctionShaders(D3D9DeviceEx* device)
-  : m_device        (device)
-  , m_ffShaderCount ("") {}
-
-
-  void HudFixedFunctionShaders::update(dxvk::high_resolution_clock::time_point time) {
-    m_ffShaderCount = str::format(
-      "VS: ", m_device->GetOptions()->ffUbershaderVS ? "1*" : str::format(m_device->GetFixedFunctionVSCount()),
-      ", FS: ", m_device->GetOptions()->ffUbershaderFS ? "1*" : str::format(m_device->GetFixedFunctionFSCount()),
-      ", SWVP: ", m_device->GetSWVPShaderCount()
-    );
-  }
-
-
-  HudPos HudFixedFunctionShaders::render(
-    const Rc<DxvkCommandList>&ctx,
-    const HudPipelineKey&     key,
-    const HudOptions&         options,
-          HudRenderer&        renderer,
-          HudPos              position) {
-    position.y += 16;
-    renderer.drawText(16, position, 0xffc0ff00u, "FF Shaders:");
-    renderer.drawText(16, { position.x + 155, position.y }, 0xffffffffu, m_ffShaderCount);
-
-    position.y += 8;
-    return position;
-  }
-
 
   HudSWVPState::HudSWVPState(D3D9DeviceEx* device)
-          : m_device          (device)
-          , m_isSWVPText ("") {}
+  : m_device(device)  {
 
+  }
 
 
   void HudSWVPState::update(dxvk::high_resolution_clock::time_point time) {
+    m_swvpShaderCount = str::format(m_device->GetSWVPShaderCount());
+
     if (m_device->IsSWVP()) {
       if (m_device->CanOnlySWVP()) {
         m_isSWVPText = "SWVP";
@@ -108,6 +82,10 @@ namespace dxvk::hud {
     position.y += 16;
     renderer.drawText(16, position, 0xffc0ff00u, "Vertex Processing:");
     renderer.drawText(16, { position.x + 240, position.y }, 0xffffffffu, m_isSWVPText);
+
+    position.y += 20;
+    renderer.drawText(16, position, 0xffc0ff00u, "SWVP Shaders:");
+    renderer.drawText(16, { position.x + 168, position.y }, 0xffffffffu, m_swvpShaderCount);
 
     position.y += 8;
     return position;

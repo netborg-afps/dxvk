@@ -36,11 +36,13 @@ namespace dxvk {
   D3D9Adapter::D3D9Adapter(
           D3D9InterfaceEx* pParent,
     const D3D9ON12_ARGS*   p9On12Args,
+          Rc<DxvkInstance> Instance,
           Rc<DxvkAdapter>  Adapter,
           UINT             Ordinal,
           UINT             DisplayIndex)
   : m_parent          (pParent),
     m_adapter         (Adapter),
+    m_caps            (*Instance, Adapter->handle(), nullptr),
     m_ordinal         (Ordinal),
     m_displayIndex    (DisplayIndex),
     m_modeCacheFormat (D3D9Format::Unknown) {
@@ -147,7 +149,9 @@ namespace dxvk {
     if (rt && volumeTexture)
       return D3DERR_NOTAVAILABLE;
 
-    if (unlikely(rt && CheckFormat == D3D9Format::A8 && m_parent->GetOptions().disableA8RT))
+    auto& options = m_parent->GetOptions();
+
+    if (unlikely(rt && CheckFormat == D3D9Format::A8 && options.disableA8RT))
       return D3DERR_NOTAVAILABLE;
 
     // NULL RT format hack (supported across all
@@ -180,8 +184,7 @@ namespace dxvk {
     // Nvidia specific depth bounds test hack
     // (supported ever since the GeForce 6 series)
     if (unlikely(CheckFormat == D3D9Format::NVDB && surface))
-      return (!isD3D8Compatible &&
-              m_adapter->features().core.features.depthBounds && isNvidia)
+      return (!isD3D8Compatible && m_caps.getFeatures().core.features.depthBounds && isNvidia)
         ? D3D_OK
         : D3DERR_NOTAVAILABLE;
 
@@ -220,7 +223,8 @@ namespace dxvk {
     if (mapping.FormatSrgb  == VK_FORMAT_UNDEFINED && srgb)
       return D3DERR_NOTAVAILABLE;
 
-    if (RType == D3DRTYPE_CUBETEXTURE && mapping.Aspect != VK_IMAGE_ASPECT_COLOR_BIT)
+    if (RType == D3DRTYPE_CUBETEXTURE && mapping.Aspect != VK_IMAGE_ASPECT_COLOR_BIT
+     && !options.supportCubeDepthFormats)
       return D3DERR_NOTAVAILABLE;
 
     // Let's actually ask Vulkan now that we got some quirks out the way!
@@ -228,6 +232,7 @@ namespace dxvk {
     if (unlikely(mapping.ConversionFormatInfo.FormatColor != VK_FORMAT_UNDEFINED)) {
       format = mapping.ConversionFormatInfo.FormatColor;
     }
+
     return CheckDeviceVkFormat(format, Usage, RType);
   }
 
@@ -272,16 +277,19 @@ namespace dxvk {
       return D3DERR_NOTAVAILABLE;
 
     // Therefore...
+    const auto& properties = m_caps.getProperties();
+    const auto& features = m_caps.getFeatures();
+
     VkSampleCountFlags sampleFlags = VkSampleCountFlags(sampleCount);
 
     VkSampleCountFlags availableFlags;
     if (dst.FormatColor == VK_FORMAT_UNDEFINED)
-      availableFlags = m_adapter->deviceProperties().core.properties.limits.framebufferDepthSampleCounts
-                     & m_adapter->deviceProperties().core.properties.limits.framebufferColorSampleCounts;
+      availableFlags = properties.core.properties.limits.framebufferDepthSampleCounts
+                     & properties.core.properties.limits.framebufferColorSampleCounts;
     else if (IsDepthStencilFormat(SurfaceFormat))
-      availableFlags = m_adapter->deviceProperties().core.properties.limits.framebufferDepthSampleCounts;
+      availableFlags = properties.core.properties.limits.framebufferDepthSampleCounts;
     else
-      availableFlags = m_adapter->deviceProperties().core.properties.limits.framebufferColorSampleCounts;
+      availableFlags = properties.core.properties.limits.framebufferColorSampleCounts;
 
     if (!(availableFlags & sampleFlags) && dst.FormatColor != VK_FORMAT_UNDEFINED) {
       // Adreno 7XX GPUs cannot report general support for 8x MSAA because they do not support it for 128 bit formats.
@@ -305,7 +313,7 @@ namespace dxvk {
       if (dst.ConversionFormatInfo.FormatType != D3D9ConversionFormat_None)
         query.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
 
-      if (m_adapter->features().extAttachmentFeedbackLoopLayout.attachmentFeedbackLoopLayout)
+      if (features.extAttachmentFeedbackLoopLayout.attachmentFeedbackLoopLayout)
         query.usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
 
       auto limits = m_adapter->getFormatLimits(query);
@@ -397,7 +405,7 @@ namespace dxvk {
     auto& options = m_parent->GetOptions();
 
     const uint32_t maxShaderModel = m_parent->IsD3D8Compatible() ? std::min(1u, options.shaderModel) : options.shaderModel;
-    const auto& limits = m_adapter->deviceProperties().core.properties.limits;
+    const auto& limits = m_caps.getProperties().core.properties.limits;
 
     // TODO: Actually care about what the adapter supports here.
     // ^ For Intel and older cards most likely here.
@@ -854,7 +862,7 @@ namespace dxvk {
     if (pLUID == nullptr)
       return D3DERR_INVALIDCALL;
 
-    auto& vk11 = m_adapter->deviceProperties().vk11;
+    auto& vk11 = m_caps.getProperties().vk11;
 
     if (vk11.deviceLUIDValid)
       *pLUID = bit::cast<LUID>(vk11.deviceLUID);
@@ -1032,7 +1040,7 @@ namespace dxvk {
   void D3D9Adapter::CacheIdentifierInfo() {
     auto& options = m_parent->GetOptions();
 
-    const auto& props = m_adapter->deviceProperties();
+    const auto& props = m_caps.getProperties();
 
     m_deviceGuid   = bit::cast<GUID>(props.vk11.deviceUUID);
     m_vendorId     = props.core.properties.vendorID;

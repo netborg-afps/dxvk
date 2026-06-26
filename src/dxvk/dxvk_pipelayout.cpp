@@ -234,6 +234,8 @@ namespace dxvk {
       initMappings(key);
     else
       initPipelineLayout(key);
+
+    initPushDataCopy();
   }
 
 
@@ -245,12 +247,92 @@ namespace dxvk {
   }
 
 
+  void DxvkPipelineLayout::writeSpecData(void* dst, const uint32_t* data) const {
+    auto dstPtr = reinterpret_cast<char*>(dst);
+
+    size_t offset = 0u;
+
+    if (unlikely(m_heap.specDataOffset)) {
+      std::memset(dstPtr + offset, 0, m_heap.specDataOffset);
+      offset += m_heap.specDataOffset;
+    }
+
+    size_t dataSize = sizeof(DxvkScInfo);
+    std::memcpy(dstPtr + offset, data, dataSize);
+
+    offset += dataSize;
+
+    if (offset < m_heap.specDataSize)
+      std::memset(dstPtr + offset, 0, m_heap.specDataSize - offset);
+  }
+
+
+  void DxvkPipelineLayout::gatherPushData(void* dst, const void* srcData, const void* srcResources) const {
+    auto dstPtr = reinterpret_cast<uint32_t*>(dst);
+
+    auto srcPtr = reinterpret_cast<const uint32_t*>(srcData);
+    auto resPtr = reinterpret_cast<const uint32_t*>(srcResources);
+
+    for (const auto& e : m_pushData.copies) {
+      auto copyDst = dstPtr + e.dstDwordOffset;
+      auto copySrc = (e.isResource ? resPtr : srcPtr) + e.srcDwordOffset;
+
+      #if defined(DXVK_ARCH_X86) && (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER))
+      // Optimize for small copies (typically ≤32 bytes), and use
+      // the fact that all blocks are at least dword-aligned
+      uint32_t dwordIndex = 0u;
+
+      while (dwordIndex + 4u <= e.dwordCount) {
+        __m128i data = _mm_loadu_si128(reinterpret_cast<const __m128i*>(copySrc + dwordIndex));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(copyDst + dwordIndex), data);
+        dwordIndex += 4u;
+      }
+
+      if (e.dwordCount & 2u) {
+        __m128i data = _mm_loadu_si64(copySrc + dwordIndex);
+        _mm_storeu_si64(copyDst + dwordIndex, data);
+        dwordIndex += 2u;
+      }
+
+      if (e.dwordCount & 1u)
+        std::memcpy(copyDst + dwordIndex, copySrc + dwordIndex, sizeof(uint32_t));
+      #else
+      std::memcpy(copyDst, copySrc, e.dwordCount * sizeof(uint32_t));
+      #endif
+    }
+  }
+
+
+  std::pair<VkDeviceSize, VkDeviceSize> DxvkPipelineLayout::computeSpecDataSetLayout() {
+    VkDeviceSize alignment = m_device->getDescriptorProperties().getDescriptorSetAlignment();
+
+    if (m_device->canUseDescriptorHeap())
+      return std::make_pair(align(sizeof(DxvkScInfo), alignment), 0u);
+
+    if (m_device->canUseDescriptorBuffer()) {
+      auto vk = m_device->vkd();
+
+      VkDeviceSize size = 0u;
+      VkDeviceSize offset = 0u;
+
+      VkDescriptorSetLayout layout = m_device->getSpecDataSetLayout();
+      vk->vkGetDescriptorSetLayoutSizeEXT(vk->device(), layout, &size);
+      vk->vkGetDescriptorSetLayoutBindingOffsetEXT(vk->device(), layout, 0u, &offset);
+
+      return std::make_pair(align(size, alignment), offset);
+    }
+
+    return std::make_pair(0u, 0u);
+  }
+
+
   void DxvkPipelineLayout::initMetadata(
     const DxvkPipelineLayoutKey&      key) {
     // Determine bind point based on shader stages
     m_bindPoint = (key.getStageMask() == VK_SHADER_STAGE_COMPUTE_BIT)
       ? VK_PIPELINE_BIND_POINT_COMPUTE
       : VK_PIPELINE_BIND_POINT_GRAPHICS;
+    m_stageMask = key.getStageMask();
 
     // Get set layouts from pipeline layout key and compute memory size
     for (uint32_t i = 0; i < key.getDescriptorSetCount(); i++) {
@@ -259,6 +341,11 @@ namespace dxvk {
       m_heap.setMemorySize += key.getDescriptorSetLayout(i)
         ? key.getDescriptorSetLayout(i)->getMemorySize()
         : 0u;
+    }
+
+    if (key.getType() == DxvkPipelineLayoutType::Independent) {
+      std::tie(m_heap.specDataSize, m_heap.specDataOffset) = computeSpecDataSetLayout();
+      m_heap.setMemorySize += m_heap.specDataSize;
     }
 
     // Compute merged push data block from all used blocks
@@ -281,13 +368,16 @@ namespace dxvk {
     auto vk = m_device->vkd();
 
     // Gather descriptor set layout objects, some of these may be null.
-    small_vector<VkDescriptorSetLayout, DxvkPipelineLayoutKey::MaxSets + 1u> setLayouts;
+    small_vector<VkDescriptorSetLayout, DxvkPipelineLayoutKey::MaxSets + 2u> setLayouts;
 
     if (m_flags.test(DxvkPipelineLayoutFlag::UsesSamplerHeap))
       setLayouts.push_back(m_device->getSamplerDescriptorSet().layout);
 
     for (uint32_t i = 0; i < key.getDescriptorSetCount(); i++)
       setLayouts.push_back(m_setLayouts[i] ? m_setLayouts[i]->getSetLayout() : VK_NULL_HANDLE);
+
+    if (key.getType() == DxvkPipelineLayoutType::Independent)
+      setLayouts.push_back(m_device->getSpecDataSetLayout());
 
     // Set up push constant range, if any
     VkPushConstantRange pushConstantRange = { };
@@ -343,27 +433,120 @@ namespace dxvk {
     for (uint32_t set = 0u; set < m_setLayouts.size(); set++) {
       auto layout = m_setLayouts[set];
 
-      if (!layout)
-        continue;
+      if (layout) {
+        for (uint32_t i = 0u; i < layout->getBindingCount(); i++) {
+          auto bindingInfo = layout->getBindingInfo(i);
 
-      for (uint32_t i = 0u; i < layout->getBindingCount(); i++) {
-        auto bindingInfo = layout->getBindingInfo(i);
+          auto& entry = m_mapping.mappings.emplace_back();
+          entry.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+          entry.descriptorSet = setIndex;
+          entry.firstBinding = i;
+          entry.bindingCount = 1u;
+          entry.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+          entry.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
 
-        auto& entry = m_mapping.mappings.emplace_back();
-        entry.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
-        entry.descriptorSet = setIndex + set;
-        entry.firstBinding = i;
-        entry.bindingCount = 1u;
-        entry.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
-        entry.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
+          auto& pushIndex = entry.sourceData.pushIndex;
+          pushIndex.heapOffset = bindingInfo.offset;
+          pushIndex.pushOffset = pushBase;
+          pushIndex.heapIndexStride = 1u << m_heap.offsetShift;
+          pushIndex.heapArrayStride = m_device->getDescriptorProperties().getDescriptorTypeInfo(bindingInfo.descriptorType).size;
+        }
+      }
 
-        auto& pushIndex = entry.sourceData.pushIndex;
-        pushIndex.heapOffset = bindingInfo.offset;
-        pushIndex.pushOffset = pushBase + sizeof(uint32_t) * set;
-        pushIndex.heapIndexStride = 1u << m_heap.offsetShift;
-        pushIndex.heapArrayStride = m_device->getDescriptorProperties().getDescriptorTypeInfo(bindingInfo.descriptorType).size;
+      setIndex += 1u;
+      pushBase += sizeof(uint32_t);
+    }
+
+    // For fast-linked pipelines, add an inline UBO offset after all
+    // the actual sets that points to spec constant fallback data
+    if (key.getType() == DxvkPipelineLayoutType::Independent) {
+      auto& entry = m_mapping.mappings.emplace_back();
+      entry.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+      entry.descriptorSet = setIndex;
+      entry.firstBinding = 0u;
+      entry.bindingCount = 1u;
+      entry.resourceMask = VK_SPIRV_RESOURCE_TYPE_UNIFORM_BUFFER_BIT_EXT;
+      entry.source = VK_DESCRIPTOR_MAPPING_SOURCE_RESOURCE_HEAP_DATA_EXT;
+
+      auto& heapData = entry.sourceData.heapData;
+      heapData.pushOffset = pushBase;
+
+      setIndex += 1u;
+      pushBase += sizeof(uint32_t);
+    }
+
+    // Add push address mappings for PushData buffers
+    for (uint32_t i = 0u; i < key.getVaBindingCount(); i++) {
+      auto bindingInfo = key.getVaBinding(i);
+
+      auto& entry = m_mapping.mappings.emplace_back();
+      entry.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_AND_BINDING_MAPPING_EXT;
+      entry.descriptorSet = DxvkDescriptorSets::Virtual;
+      entry.firstBinding = bindingInfo.binding;
+      entry.bindingCount = 1u;
+      entry.resourceMask = VK_SPIRV_RESOURCE_TYPE_UNIFORM_BUFFER_BIT_EXT
+                         | VK_SPIRV_RESOURCE_TYPE_READ_ONLY_STORAGE_BUFFER_BIT_EXT
+                         | VK_SPIRV_RESOURCE_TYPE_READ_WRITE_STORAGE_BUFFER_BIT_EXT;
+      entry.source = VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_ADDRESS_EXT;
+      entry.sourceData.pushAddressOffset = bindingInfo.vaOffset;
+    }
+  }
+
+
+  void DxvkPipelineLayout::initPushDataCopy() {
+    for (auto i : bit::BitMask(getPushDataMask())) {
+      auto block = getPushDataBlock(i);
+      auto resourceMask = block.getResourceDwordMask();
+
+      // Copies need to be entirely dword-aligned, so pad in case any
+      // push data block begins or ends outside of a dword boundary.
+      auto srcOffset = DxvkPushDataBlock::computeBlockOffsetForIndex(i) / sizeof(uint32_t);
+
+      auto dstOffset = block.getOffset() / sizeof(uint32_t);
+      auto dstEnd = align<uint32_t>(block.getOffset() + block.getSize(), sizeof(uint32_t)) / sizeof(uint32_t);
+
+      auto blockSize = dstEnd - dstOffset;
+
+      // Add and merge copy ranges for individual push data dwords
+      for (uint32_t i = 0u; i < blockSize; i++) {
+        PushDataCopy copy = {};
+        copy.dwordCount = 1u;
+
+        if (resourceMask & (1ull << i)) {
+          // Resource data is expected to laid out correctly already, so
+          // we need to use the "destination" offset even for the source
+          copy.isResource = true;
+          copy.dstDwordOffset = dstOffset + i;
+          copy.srcDwordOffset = dstOffset + i;
+        } else {
+          // Constant data is packed per stage
+          copy.dstDwordOffset = dstOffset + i;
+          copy.srcDwordOffset = srcOffset + i;
+        }
+
+        addPushDataCopyEntry(copy);
       }
     }
+  }
+
+
+  void DxvkPipelineLayout::addPushDataCopyEntry(const PushDataCopy& e) {
+    if (!e.dwordCount)
+      return;
+
+    if (!m_pushData.copies.empty()) {
+      auto& last = m_pushData.copies.back();
+
+      if (last.isResource == e.isResource
+       && last.srcDwordOffset + last.dwordCount == e.srcDwordOffset
+       && last.dstDwordOffset + last.dwordCount == e.dstDwordOffset) {
+        last.dwordCount += e.dwordCount;
+        return;
+      }
+    }
+
+    m_pushData.copies.push_back(e);
+    m_pushData.needsGather |= !e.isResource;
   }
 
 
@@ -459,11 +642,13 @@ namespace dxvk {
     auto setLayouts = buildDescriptorSetLayouts(type, flags, setInfos, builder, manager);
 
     // Create the actual pipeline layout
+    auto& layout = m_layouts[uint32_t(type)];
+
     DxvkPipelineLayoutKey key(type, flags, builder.getStageMask(),
       pushDataBlocks.size(), pushDataBlocks.data(),
-      setLayouts.size(), setLayouts.data());
+      setLayouts.size(), setLayouts.data(),
+      layout.vaBindings.size(), layout.vaBindings.data());
 
-    auto& layout = m_layouts[uint32_t(type)];
     layout.layout = manager->createPipelineLayout(key);
   }
 
@@ -487,6 +672,9 @@ namespace dxvk {
     if (type != DxvkPipelineLayoutType::BuiltIn && device->canUseDescriptorHeap())
       pushDataSize += sizeof(uint32_t) * setInfos.count;
 
+    if (type == DxvkPipelineLayoutType::Independent && device->canUseDescriptorHeap())
+      pushDataSize += sizeof(uint32_t);
+
     if (type == DxvkPipelineLayoutType::Independent) {
       // For independent layouts, we don't know in advance how the other stages
       // are going to use their push constants, so allocate the maximum amount.
@@ -504,12 +692,13 @@ namespace dxvk {
 
       for (auto i : bit::BitMask(stageMask)) {
         auto stage = VkShaderStageFlagBits(1u << i);
+        auto size = DxvkPushDataBlock::computeBlockSizeForStage(stage);
         index = DxvkPushDataBlock::computeIndex(stage);
 
         pushDataBlocks[index] = DxvkPushDataBlock(stage,
-          pushDataSize, MaxPerStagePushDataSize, 8u, 0u);
+          pushDataSize, size, 8u, 0u);
 
-        pushDataSize += MaxPerStagePushDataSize;
+        pushDataSize += size;
         pushDataMask |= 1u << index;
       }
 
@@ -562,6 +751,9 @@ namespace dxvk {
 
     auto& layout = m_layouts[uint32_t(type)];
 
+    uint32_t virtualBindingCount = 0u;
+    uint32_t baseSetIndex = uint32_t(flags.test(DxvkPipelineLayoutFlag::UsesSamplerHeap));
+
     // Generate descriptor set layout keys from all bindings
     std::array<DxvkDescriptorSetLayoutKey, MaxSets> setLayoutKeys = { };
 
@@ -576,14 +768,16 @@ namespace dxvk {
       DxvkShaderBinding dstMapping(srcMapping);
 
       if (binding.usesDescriptor()) {
-        uint32_t realSet = set + uint32_t(flags.test(DxvkPipelineLayoutFlag::UsesSamplerHeap));
-
         auto bindingIndex = setLayoutKeys[set].add(DxvkDescriptorSetLayoutBinding(binding));
-        dstMapping = DxvkShaderBinding(binding.getStageMask(), realSet, bindingIndex);
+        dstMapping = DxvkShaderBinding(binding.getStageMask(), set + baseSetIndex, bindingIndex);
 
-        layout.bindingMap.addBinding(srcMapping, dstMapping);
         layout.setStateMasks[set] |= computeStateMask(binding);
+      } else {
+        dstMapping = DxvkShaderBinding(binding.getStageMask(),
+          DxvkDescriptorSets::Virtual, virtualBindingCount++);
       }
+
+      layout.bindingMap.addBinding(srcMapping, dstMapping);
 
       if (binding.getDescriptorCount()) {
         if (binding.usesDescriptor()) {
@@ -616,9 +810,17 @@ namespace dxvk {
     if (flags.test(DxvkPipelineLayoutFlag::UsesSamplerHeap)) {
       DxvkShaderBinding dstMapping(builder.getStageMask(), 0u, 0u);
 
-      for (uint32_t i = 0u; i < builder.getSamplerHeapBindingCount(); i++) {
+      for (uint32_t i = 0u; i < builder.getSamplerHeapBindingCount(); i++)
         layout.bindingMap.addBinding(builder.getSamplerHeapBinding(i), dstMapping);
-      }
+    }
+
+    // Remap spec data buffer when using independent sets.
+    if (type == DxvkPipelineLayoutType::Independent) {
+      DxvkShaderBinding dstMapping(builder.getStageMask(),
+        baseSetIndex + DxvkDescriptorSets::GpIndependentSetCount, 0u);
+
+      for (uint32_t i = 0u; i < builder.getSpecDataBindingCount(); i++)
+        layout.bindingMap.addBinding(builder.getSpecDataBinding(i), dstMapping);
     }
 
     // Create the actual descriptor set layout objects
@@ -829,6 +1031,12 @@ namespace dxvk {
   }
 
 
+  void DxvkPipelineLayoutBuilder::addSpecDataBuffer(
+    const DxvkShaderBinding&        binding) {
+    m_specDataBuffers.push_back(binding);
+  }
+
+
   void DxvkPipelineLayoutBuilder::addLayout(
     const DxvkPipelineLayoutBuilder& layout) {
     m_stageMask |= layout.m_stageMask;
@@ -847,6 +1055,9 @@ namespace dxvk {
 
     for (uint32_t i = 0u; i < layout.getSamplerHeapBindingCount(); i++)
       addSamplerHeap(layout.getSamplerHeapBinding(i));
+
+    for (uint32_t i = 0u; i < layout.getSpecDataBindingCount(); i++)
+      addSpecDataBuffer(layout.getSpecDataBinding(i));
   }
 
 }

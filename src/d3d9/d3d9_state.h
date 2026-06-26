@@ -2,13 +2,12 @@
 
 #include "d3d9_caps.h"
 #include "d3d9_constant_set.h"
-#include "../dxso/dxso_common.h"
-#include "../util/util_matrix.h"
-
 #include "d3d9_surface.h"
 #include "d3d9_shader.h"
 #include "d3d9_vertex_declaration.h"
 #include "d3d9_buffer.h"
+
+#include "../util/util_matrix.h"
 
 #include <array>
 #include <bitset>
@@ -34,39 +33,304 @@ namespace dxvk {
     }
   };
 
-  struct D3D9RenderStateInfo {
-    std::array<float, 3> fogColor = { };
-    float fogScale   = 0.0f;
-    float fogEnd     = 1.0f;
-    float fogDensity = 1.0f;
+  /// Shared push data
+  struct D3D9SharedPushData {
+    static constexpr VkShaderStageFlags Stages = VK_SHADER_STAGE_ALL_GRAPHICS;
+    static constexpr uint32_t           Offset = 0u;
 
-    uint32_t alphaRef = 0u;
+    uint8_t fogColor[3] = {};
+    uint8_t alphaRef = 0u;
 
-    float pointSize    = 1.0f;
-    float pointSizeMin = 1.0f;
-    float pointSizeMax = 64.0f;
-    float pointScaleA  = 1.0f;
-    float pointScaleB  = 0.0f;
-    float pointScaleC  = 0.0f;
+    float fogDistanceScale = 0.0f;
+    float fogDistanceEnd = 0.0f;
+    float fogDensity = 0.0f;
   };
 
-  enum class D3D9RenderStateItem {
-    FogColor   = 0,
-    FogScale   = 1,
-    FogEnd,
-    FogDensity,
-    AlphaRef,
+  /// Vertex shader push data
+  struct D3D9VsPushData {
+    static constexpr VkShaderStageFlags Stages = VK_SHADER_STAGE_VERTEX_BIT;
+    static constexpr uint32_t           Offset = 0u;
 
-    PointSize,
-    PointSizeMin,
-    PointSizeMax,
-    PointScaleA,
-    PointScaleB,
-    PointScaleC,
-
-    Count
+    // Dynamically indexed float count
+    uint16_t floatCount = 0u;
+    // Point size, as 13.3 fixed-point
+    uint16_t pointSize = 0u;
+    uint16_t pointSizeMin = 0u;
+    uint16_t pointSizeMax = 0u;
   };
 
+  /// Fixed-function vertex shader push data.
+  /// Can theoretically use up to 32 bytes.
+  struct D3D9FfvsPushData {
+    static constexpr VkShaderStageFlags Stages = VK_SHADER_STAGE_VERTEX_BIT;
+    static constexpr uint32_t           Offset = sizeof(D3D9VsPushData);
+
+    float pointScaleA = 0.0f;
+    float pointScaleB = 0.0f;
+    float pointScaleC = 0.0f;
+  };
+
+  /// Fixed-function pixel shader push data.
+  struct D3D9FfpsPushData {
+    static constexpr VkShaderStageFlags Stages = VK_SHADER_STAGE_FRAGMENT_BIT;
+    static constexpr uint32_t           Offset = 0u;
+
+    uint32_t textureFactor = 0u;
+  };
+
+  /// Complete push data state. Note that the data layout inside
+  /// this struct is different from what it is in shaders.
+  struct D3D9PushData {
+    D3D9SharedPushData shared;
+    D3D9VsPushData vs;
+    D3D9FfvsPushData ffvs;
+    D3D9FfpsPushData ffps;
+  };
+
+  /// Sampler modes
+  enum class D3D9SamplerMode : uint8_t {
+    Default   = 0,
+    Fetch4    = 1,
+    Dref      = 2,
+    DrefClamp = 3,
+  };
+
+  /// Specialization constant data. Each dword corresponds to one numbered
+  /// spec constants inside shaders and in the backend.
+  ///
+  /// Spec constants are packed in such a way that shaders can use only
+  /// those constants that they actually need, with minimal unrelated
+  /// state. This helps keep the number of redundant pipeline variants
+  /// to a minimum, while requiring little normalization in the front-end.
+  struct D3D9SpecData {
+    // Spec ID 0: Common parameters used by all pipelines. Alpha compare
+    // op is packed into the lower 4 bits of the alpha test byte, alpha
+    // precision into the upper 4 bits.
+    uint8_t alphaTest = 0u;
+    bool enablePointSprite = false;
+    uint8_t clipPlaneCount = 0u;
+    uint8_t drefScale = 0u;
+
+    // Spec ID 1: Fog. Used in fixed-function pipelines as
+    // well as pixel shaders with Shader Model 2 and below.
+    bool fogEnable = 0u;
+    uint8_t fogModeVertex = 0u;
+    uint8_t fogModePixel = 0u;
+    bool fogUseZ = 0u;
+
+    // Spec ID 2: Parameters used in fixed-function pipelines. The
+    // projection mask is also used in shader model 1 pixel shaders.
+    uint8_t samplerProjMask = 0u;
+    bool enableGlobalSpecular = false;
+    bool enablePointScale = false;
+    bool psIsShaderModel3 = false;
+
+    // Spec ID 3: Vertex shader sampler info and bool
+    // constants. Used in programmable shaders only.
+    uint8_t vsSamplerTypes = 0u;
+    uint8_t vsSamplerModes = 0u;
+    uint16_t vsBoolConstants = 0u;
+
+    // Spec ID 4: Pixel shader sampler types, two bits per sampler.
+    // Fixed-function will only use the lower 16 bits.
+    uint32_t psSamplerTypes = 0u;
+
+    // Spec ID 5: Pixel shader sampler modes, two bits per sampler.
+    // Fixed-function will only use the lower 16 bits.
+    uint32_t psSamplerModes = 0u;
+
+    // Spec ID 6: Pixel shader boolean constants.
+    // Programmable shaders only. 16 bits used.
+    uint16_t psBoolConstants = 0u;
+    uint16_t spec6Pad = 0u;
+
+    // Spec ID 7: Reserved.
+    uint32_t spec7Pad = 0u;
+
+    // Spec ID 8..11: Texture stage ops for fixed function.
+    // Each stage is packed as follows:
+    // - Bits 0..4: Color op
+    // - Bits 5..7: Unused
+    // - Bits 8..12: Alpha op
+    // - Bits 13..14: Unused;
+    // - Bit 15: Whether to store result in temp
+    std::array<uint16_t, 8u> stageOps = {};
+
+    // Spec ID 12..19: Arguments for each texture stage:
+    // - Bits 0..4: Color arg 0, with flags packed into bits 3..4
+    // - Bits 5..9: Color arg 1
+    // - Bits 10..14: Color arg 2
+    // - Bit 15: Unused
+    // - Bits 16..20: Alpha arg 0
+    // - Bits 21..25: Alpha arg 1
+    // - Bits 26..30: Alpha arg 2
+    // - Bit 31: Unused
+    std::array<uint32_t, 8u> stageArgs = {};
+
+    bool setAlphaCompareOp(VkCompareOp op) {
+      return set(alphaTest, op, 0u, 4u);
+    }
+
+    bool setAlphaPrecision(uint32_t precision) {
+      return set(alphaTest, precision, 4u, 4u);
+    }
+
+    bool setDrefScale(uint32_t shift) {
+      return set(drefScale, shift);
+    }
+
+    bool setClipPlaneCount(uint32_t count) {
+      return set(clipPlaneCount, count);
+    }
+
+    bool setPointScale(bool enable) {
+      return set(enablePointScale, enable);
+    }
+
+    bool setPointSprite(bool enable) {
+      return set(enablePointSprite, enable);
+    }
+
+    bool setGlobalSpecular(bool enable) {
+      return set(enableGlobalSpecular, enable);
+    }
+
+    bool setFogMode(bool enable, bool zFog, D3DFOGMODE vertexFog, D3DFOGMODE pixelFog) {
+      bool dirty = false;
+      dirty |= set(fogEnable,     enable);
+      dirty |= set(fogModeVertex, enable && !pixelFog ? vertexFog : D3DFOG_NONE);
+      dirty |= set(fogModePixel,  enable              ? pixelFog  : D3DFOG_NONE);
+      dirty |= set(fogUseZ,       enable && zFog);
+      return dirty;
+    }
+
+    bool setSamplerProjectionMask(uint32_t mask) {
+      return set(samplerProjMask, mask);
+    }
+
+    bool setPsSamplers(uint64_t textureTypes, uint32_t nullMask,
+        uint32_t fetch4Mask, uint32_t drefMask, uint32_t drefClampMask) {
+      return updateSamplers(psSamplerTypes, psSamplerModes, textureTypes,
+        nullMask, fetch4Mask, drefMask, drefClampMask);
+    }
+
+    bool setVsSamplers(uint32_t nullMask, uint32_t drefMask, uint32_t drefClampMask) {
+      return updateSamplers(vsSamplerTypes, vsSamplerModes, 0u,
+        nullMask      >> FirstVSSamplerSlot, 0u,
+        drefMask      >> FirstVSSamplerSlot,
+        drefClampMask >> FirstVSSamplerSlot);
+    }
+
+    bool setPsShaderModel(uint32_t majorVersion) {
+      return set(psIsShaderModel3, majorVersion >= 3u);
+    }
+
+    bool setVsBoolConstants(uint32_t bits) {
+      return set(vsBoolConstants, bits);
+    }
+
+    bool setPsBoolConstants(uint32_t bits) {
+      return set(psBoolConstants, bits);
+    }
+
+    bool setTextureStage(uint32_t stage, D3DTEXTUREOP colorOp, D3DTEXTUREOP alphaOp, DWORD resultArg,
+        DWORD colorArg0, DWORD colorArg1, DWORD colorArg2,
+        DWORD alphaArg0, DWORD alphaArg1, DWORD alphaArg2) {
+      uint16_t ops = 0u;
+      ops |= getTextureOp(colorOp) << 0u;
+      ops |= getTextureOp(alphaOp) << 8u;
+
+      if ((resultArg & D3DTA_SELECTMASK) == D3DTA_TEMP)
+        ops |= 1u << 15u;
+
+      uint32_t args = 0u;
+
+      if (colorOp != D3DTOP_DISABLE) {
+        args |= getTextureArg(colorArg0) <<  0u;
+        args |= getTextureArg(colorArg1) <<  5u;
+        args |= getTextureArg(colorArg2) << 10u;
+      }
+
+      if (alphaOp != D3DTOP_DISABLE) {
+        args |= getTextureArg(alphaArg0) << 16u;
+        args |= getTextureArg(alphaArg1) << 21u;
+        args |= getTextureArg(alphaArg2) << 26u;
+      }
+
+      bool dirty = false;
+      dirty |= set(stageOps[stage], ops);
+      dirty |= set(stageArgs[stage], args);
+      return dirty;
+    }
+
+    bool disableTextureStage(uint32_t stage) {
+      uint32_t ops = D3DTOP_DISABLE | (D3DTOP_DISABLE << 5u);
+
+      bool dirty = false;
+      dirty |= set(stageOps[stage], ops);
+      dirty |= set(stageArgs[stage], 0u);
+      return dirty;
+    }
+
+    template<typename T>
+    static bool updateSamplers(T& types, T& modes, uint32_t textureTypes, uint32_t nullMask,
+        uint32_t fetch4Mask, uint32_t drefMask, uint32_t drefClampMask) {
+      // Forward null texture mask as texture type '3'
+      uint32_t nullTypes = bit::interleave(nullMask, nullMask);
+      uint32_t newTypes = nullTypes | textureTypes;
+
+      // As for the modes, treat it as a two-bit value:
+      // - 0: Default mode
+      // - 1: Fetch4 (color only)
+      // - 2: Depth-compare
+      // - 3: Depth-compare with dref clamp
+      uint32_t newFetch4 = fetch4Mask & ~drefMask;
+      uint32_t newClamp = drefClampMask & drefMask;
+
+      uint32_t newModes = bit::interleave(newFetch4 | newClamp, drefMask) & ~nullTypes;
+
+      bool dirty = false;
+      dirty |= set(types, newTypes);
+      dirty |= set(modes, newModes);
+      return dirty;
+    }
+
+    static uint16_t getTextureOp(D3DTEXTUREOP op) {
+      return uint16_t(op) & 0x1fu;
+    }
+
+    static uint32_t getTextureArg(DWORD arg) {
+      // Shift flags one  to the right to pack everything
+      // into 5 bits, only 7 selectors are defined.
+      uint32_t select = arg & D3DTA_SELECTMASK;
+      uint32_t flags = arg & ~D3DTA_SELECTMASK;
+      return uint32_t(select | (flags >> 1u)) & 0x1fu;
+    }
+
+    template<typename T, typename U>
+    static bool set(T& dst, U data) {
+      if (dst == T(data))
+        return false;
+
+      dst = T(data);
+      return true;
+    }
+
+    template<typename T, typename U>
+    static bool set(T& dst, U data, uint32_t bitIndex, uint32_t bitCount) {
+      T mask = ((T(1u) << bitCount) - 1u) << bitIndex;
+      T bits = (T(data) << bitIndex) & mask;
+
+      if ((dst & mask) == bits)
+        return false;
+
+      dst &= ~mask;
+      dst |= bits;
+      return true;
+    }
+  };
+
+  static_assert(sizeof(D3D9SpecData) <= sizeof(uint32_t) * MaxNumSpecConstants);
 
   // This is needed in fixed function for POSITION_T support.
   // These are constants we need to * and add to move
@@ -109,166 +373,6 @@ namespace dxvk {
     float Phi;
   };
 
-  struct D3D9FFShaderKeyVSData {
-    union {
-      struct {
-        uint32_t TexcoordIndices : 24;
-
-        uint32_t VertexHasPositionT : 1;
-
-        uint32_t VertexHasColor0 : 1; // Diffuse
-        uint32_t VertexHasColor1 : 1; // Specular
-
-        uint32_t VertexHasPointSize : 1;
-
-        uint32_t UseLighting : 1;
-
-        uint32_t NormalizeNormals : 1;
-        uint32_t LocalViewer : 1;
-        uint32_t RangeFog : 1;
-
-        // End of uint32_t
-
-        uint32_t TexcoordFlags : 24;
-
-        uint32_t DiffuseSource : 2;
-        uint32_t AmbientSource : 2;
-        uint32_t SpecularSource : 2;
-        uint32_t EmissiveSource : 2;
-
-        // Next uint32_t
-
-        uint32_t TransformFlags : 24;
-
-        uint32_t LightCount : 4;
-        uint32_t SpecularEnabled : 1;
-
-        // End of uint32_t
-
-        uint32_t VertexTexcoordDeclMask : 24;
-        uint32_t VertexHasFog : 1;
-
-        uint32_t VertexBlendMode    : 2;
-        uint32_t VertexBlendIndexed : 1;
-        uint32_t VertexBlendCount   : 2;
-
-        uint32_t VertexClipping     : 1;
-
-        // End of uint32_t
-      } Contents;
-
-      uint32_t Primitive[5];
-    };
-  };
-
-  struct D3D9FFShaderKeyVS {
-    D3D9FFShaderKeyVS() {
-      // memcmp safety
-      std::memset(&Data, 0, sizeof(Data));
-    }
-
-    D3D9FFShaderKeyVSData Data;
-  };
-
-  struct D3D9FixedFunctionVS {
-    Matrix4 WorldView;
-    Matrix4 NormalMatrix;
-    Matrix4 InverseView;
-    Matrix4 Projection;
-
-    std::array<Matrix4, 8> TexcoordMatrices;
-
-    D3D9ViewportInfo ViewportInfo;
-
-    Vector4 GlobalAmbient;
-    std::array<D3D9Light, caps::MaxEnabledLights> Lights;
-    D3DMATERIAL9 Material;
-    float TweenFactor;
-
-    D3D9FFShaderKeyVSData Key;
-  };
-
-
-  struct D3D9FixedFunctionVertexBlendDataHW {
-    Matrix4 WorldView[8];
-  };
-
-
-  struct D3D9FixedFunctionVertexBlendDataSW {
-    Matrix4 WorldView[256];
-  };
-
-
-  struct D3D9FFShaderStage {
-    union {
-      struct {
-        uint32_t     ColorOp   : 5;
-        uint32_t     ColorArg0 : 6;
-        uint32_t     ColorArg1 : 6;
-        uint32_t     ColorArg2 : 6;
-
-        uint32_t     AlphaOp   : 5;
-        uint32_t     AlphaArg0 : 6;
-        uint32_t     AlphaArg1 : 6;
-        uint32_t     AlphaArg2 : 6;
-
-        uint32_t     ResultIsTemp : 1;
-
-        // Included in here, read from Stage 0 for packing reasons
-        // Affects all stages.
-        uint32_t     GlobalSpecularEnable : 1;
-      } Contents;
-
-      uint32_t Primitive[2];
-    };
-  };
-
-  struct D3D9FFShaderKeyFS {
-    D3D9FFShaderKeyFS() {
-      // memcmp safety
-      std::memset(Stages, 0, sizeof(Stages));
-
-      // Normalize this. DISABLE != 0.
-      for (uint32_t i = 0; i < caps::TextureStageCount; i++) {
-        Stages[i].Contents.ColorOp = D3DTOP_DISABLE;
-        Stages[i].Contents.AlphaOp = D3DTOP_DISABLE;
-      }
-    }
-
-    D3D9FFShaderStage Stages[caps::TextureStageCount];
-  };
-
-  struct D3D9FixedFunctionPS {
-    Vector4 textureFactor;
-    D3D9FFShaderKeyFS Key;
-  };
-
-  enum D3D9SharedPSStages {
-    D3D9SharedPSStages_Constant,
-    D3D9SharedPSStages_BumpEnvMat0,
-    D3D9SharedPSStages_BumpEnvMat1,
-    D3D9SharedPSStages_BumpEnvLScale,
-    D3D9SharedPSStages_BumpEnvLOffset,
-    D3D9SharedPSStages_Count,
-  };
-
-  struct D3D9SharedPS {
-    struct Stage {
-      float Constant[4];
-      float BumpEnvMat[2][2];
-      float BumpEnvLScale;
-      float BumpEnvLOffset;
-      float Padding[2];
-    } Stages[8];
-  };
-  
-  struct D3D9VBO {
-    Com<D3D9VertexBuffer, false> vertexBuffer;
-
-    UINT              offset = 0;
-    UINT              stride = 0;
-  };
-
   constexpr D3DLIGHT9 DefaultLight = {
     D3DLIGHT_DIRECTIONAL,     // Type
     {1.0f, 1.0f, 1.0f, 0.0f}, // Diffuse
@@ -281,6 +385,93 @@ namespace dxvk {
     0.0f, 0.0f, 0.0f,         // Attenuations [constant, linear, quadratic]
     0.0f,                     // Theta
     0.0f                      // Phi
+  };
+
+  struct D3D9LightState {
+    bool isValid = false;
+    bool isEnabled = false;
+    D3DLIGHT9 light = DefaultLight;
+  };
+
+  struct D3D9FixedFunctionVS {
+    Matrix4 WorldView;
+    Matrix4 NormalMatrix;
+    Matrix4 InverseView;
+    Matrix4 Projection;
+    Matrix4 WorldViewProj;
+
+    std::array<Matrix4, 8> TexcoordMatrices;
+
+    D3D9ViewportInfo ViewportInfo;
+
+    std::array<D3D9Light, caps::MaxEnabledLights> Lights;
+    D3DMATERIAL9 Material;
+    uint32_t GlobalAmbient;
+    float TweenFactor;
+
+    // Following part uses uint8 and bool so it's gonna be represented as uint32 in the shader and manually unpacked:
+    std::array<uint8_t, caps::MaxTextureBlendStages> TexcoordIndices;
+    std::array<uint8_t, caps::MaxTextureBlendStages> TexcoordFlags;
+    std::array<uint8_t, caps::MaxTextureBlendStages> TexcoordTransformFlags;
+
+    // How many vector components does each texcoord have
+    uint32_t VertexTexcoordDeclMask;
+
+    // Vertex Decl
+    bool VertexHasPositionT;
+    bool VertexHasColor0; // Diffuse
+    bool VertexHasColor1; // Specular
+    bool VertexHasPointSize;
+    bool VertexHasFog;
+
+    // Blending
+    uint8_t VertexBlendMode;
+    bool VertexBlendIndexed;
+    uint8_t VertexBlendCount;
+
+    // Misc
+    bool VertexClipping;
+    bool NormalizeNormals;
+    bool LocalViewer;
+    bool RangeFog;
+
+    // Lighting
+    bool UseLighting;
+    uint8_t LightCount;
+    uint8_t DiffuseSource;
+    uint8_t AmbientSource;
+    uint8_t SpecularSource;
+    uint8_t EmissiveSource;
+  };
+
+  static constexpr uint32_t D3D9MaxVertexBlendTransformsHw = 8u;
+  static constexpr uint32_t D3D9MaxVertexBlendTransformsSw = 256u;
+
+  enum D3D9SharedPSStages {
+    D3D9SharedPSStages_Constant,
+    D3D9SharedPSStages_BumpEnvMat0,
+    D3D9SharedPSStages_BumpEnvMat1,
+    D3D9SharedPSStages_BumpEnvLScale,
+    D3D9SharedPSStages_BumpEnvLOffset,
+    D3D9SharedPSStages_Count,
+  };
+
+  struct D3D9SharedPS {
+    struct Stage {
+      uint32_t Constant;
+      uint32_t Padding;
+      float BumpEnvMat[2][2];
+      float BumpEnvLScale;
+      float BumpEnvLOffset;
+    } Stages[8];
+  };
+  
+  struct D3D9VBO {
+    Com<D3D9VertexBuffer, false> vertexBuffer;
+
+    UINT              offset = 0;
+    UINT              length = 0;
+    UINT              stride = 0;
   };
 
   template <typename T>
@@ -404,69 +595,113 @@ namespace dxvk {
 
     ItemType<D3DMATERIAL9>                              material = {};
 
-    std::vector<std::optional<D3DLIGHT9>>               lights;
-    std::array<DWORD, caps::MaxEnabledLights>           enabledLightIndices;
+    std::vector<D3D9LightState>                         lights;
 
     float                                               nPatchSegments = 0.0f;
-
-    bool IsLightEnabled(DWORD Index) const {
-      const auto& enabledIndices = enabledLightIndices;
-      return std::find(enabledIndices.begin(), enabledIndices.end(), Index) != enabledIndices.end();
-    }
   };
 
   using D3D9CapturableState = D3D9State<dynamic_item>;
   using D3D9DeviceState = D3D9State<static_item>;
 
-  template <
-    D3D9ShaderType   ShaderType,
-    D3D9ConstantType ConstantType,
-    typename         T,
-    typename         StateType>
-  HRESULT UpdateStateConstants(
+  template<D3D9ShaderType ShaderType, D3D9ConstantType ConstantType, typename T, typename StateType>
+  bool UpdateStateConstants(
           StateType*           pState,
           UINT                 StartRegister,
     const T*                   pConstantData,
-          UINT                 Count,
-          bool                 FloatEmu) {
-    auto UpdateHelper = [&] (auto& set) {
+          UINT                 Count) {
+    if constexpr (ConstantType == D3D9ConstantType::Bool) {
+      uint32_t* dstData = ShaderType == D3D9ShaderType::VertexShader
+        ? pState->vsConsts->bConsts
+        : pState->psConsts->bConsts;
+
+      for (uint32_t i = 0; i < Count; i++) {
+        const uint32_t constantIdx = StartRegister + i;
+        const uint32_t arrayIdx    = constantIdx / 32;
+        const uint32_t bitIdx      = constantIdx % 32;
+
+        const uint32_t bit = 1u << bitIdx;
+
+        dstData[arrayIdx] &= ~bit;
+
+        if (pConstantData[i])
+          dstData[arrayIdx] |= bit;
+      }
+
+      return true;
+    } else {
+      static_assert(sizeof(T) == 4u);
+
+      Vector4Base<T>* dstData = nullptr;
+
       if constexpr (ConstantType == D3D9ConstantType::Float) {
-
-        if (!FloatEmu) {
-          size_t size = Count * sizeof(Vector4);
-
-          std::memcpy(set->fConsts[StartRegister].data, pConstantData, size);
-        }
-        else {
-          for (UINT i = 0; i < Count; i++)
-            set->fConsts[StartRegister + i] = replaceNaN(pConstantData + (i * 4));
-        }
-      }
-      else if constexpr (ConstantType == D3D9ConstantType::Int) {
-        size_t size = Count * sizeof(Vector4i);
-
-        std::memcpy(set->iConsts[StartRegister].data, pConstantData, size);
-      }
-      else {
-        for (uint32_t i = 0; i < Count; i++) {
-          const uint32_t constantIdx = StartRegister + i;
-          const uint32_t arrayIdx    = constantIdx / 32;
-          const uint32_t bitIdx      = constantIdx % 32;
-
-          const uint32_t bit = 1u << bitIdx;
-
-          set->bConsts[arrayIdx] &= ~bit;
-          if (pConstantData[i])
-            set->bConsts[arrayIdx] |= bit;
-        }
+        dstData = ShaderType == D3D9ShaderType::VertexShader
+          ? pState->vsConsts->fConsts
+          : pState->psConsts->fConsts;
+      } else if constexpr (ConstantType == D3D9ConstantType::Int) {
+        dstData = ShaderType == D3D9ShaderType::VertexShader
+          ? pState->vsConsts->iConsts
+          : pState->psConsts->iConsts;
       }
 
-      return D3D_OK;
-    };
+      dstData += StartRegister;
 
-    return ShaderType == D3D9ShaderType::VertexShader
-      ? UpdateHelper(pState->vsConsts)
-      : UpdateHelper(pState->psConsts);
+      #if defined(DXVK_ARCH_X86) && (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER))
+      auto* dstPtr = reinterpret_cast<      __m128i*>(dstData);
+      auto* srcPtr = reinterpret_cast<const __m128i*>(pConstantData);
+
+      // In the first loop, find the first contant that has changed, if any, and
+      // only copy that. Basically a glorified memcmp. The idea is to give feedback
+      // to the caller on whether any constant values have changed.
+      bool dirty = false;
+
+      uint32_t index = 0u;
+
+      while (index < Count) {
+        __m128i srcData = _mm_loadu_si128(srcPtr + index);
+        __m128i dstData = _mm_loadu_si128(dstPtr + index);
+
+        __m128i eqMask = _mm_cmpeq_epi32(srcData, dstData);
+
+        dirty = _mm_movemask_epi8(eqMask) != 0xffff;
+        index += 1u;
+
+        if (dirty) {
+          _mm_storeu_si128(dstPtr + index - 1u, srcData);
+          break;
+        }
+      }
+
+      if (unlikely(!dirty))
+        return false;
+
+      // Once we know constants have changed, just copy the rest.
+      while (index + 2u <= Count) {
+        __m128i src0 = _mm_loadu_si128(srcPtr + index + 0u);
+        __m128i src1 = _mm_loadu_si128(srcPtr + index + 1u);
+
+        _mm_storeu_si128(dstPtr + index + 0u, src0);
+        _mm_storeu_si128(dstPtr + index + 1u, src1);
+
+        index += 2u;
+      }
+
+      if (index < Count) {
+        __m128i srcData = _mm_loadu_si128(srcPtr + index);
+        _mm_storeu_si128(dstPtr + index, srcData);
+      }
+
+      return true;
+      // If any mask bit is 0, a constant has changed
+      #else
+      size_t dataSize = Count * sizeof(*dstData);
+
+      if (!std::memcmp(&dstData->data, pConstantData, dataSize))
+        return false;
+
+      std::memcpy(&dstData->data, pConstantData, dataSize);
+      return true;
+      #endif
+    }
   }
 
   struct Direct3DState9 : public D3D9DeviceState {

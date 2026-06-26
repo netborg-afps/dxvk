@@ -25,6 +25,7 @@ d3d9_src = [
   'd3d9_format.cpp',
   'd3d9_common_texture.cpp',
   'd3d9_constant_buffer.cpp',
+  'd3d9_constant_copy.cpp',
   'd3d9_texture.cpp',
   'd3d9_surface.cpp',
   'd3d9_volume.cpp',
@@ -49,7 +50,8 @@ d3d9_src = [
   'd3d9_window.cpp',
   'd3d9_interop.cpp',
   'd3d9_on_12.cpp',
-  'd3d9_bridge.cpp'
+  'd3d9_bridge.cpp',
+  'd3d9_shader_analysis.cpp',
 ]
 
 d3d9_ld_args      = []
@@ -61,7 +63,7 @@ if platform != 'windows'
 endif
 
 d3d9_dll = shared_library(dxvk_name_prefix+'d3d9', d3d9_src, glsl_generator.process(d3d9_shaders), d3d9_res,
-  dependencies        : [ dxso_dep, dxvk_dep ],
+  dependencies        : [ dxbc_spirv_dep, dxvk_dep ],
   include_directories : dxvk_include_path,
   install             : true,
   vs_module_defs      : 'd3d9'+def_spec_ext,

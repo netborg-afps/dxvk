@@ -22,11 +22,12 @@ layout(location = 15) in float in_PointSize;
 layout(location = 16) in vec4 in_BlendWeight;
 layout(location = 17) in vec4 in_BlendIndices;
 
+invariant gl_Position;
 
 // The locations need to match with RegisterLinkerSlot in dxso_util.cpp
-precise gl_Position;
 const uint MaxClipPlaneCount = 6;
 out float gl_ClipDistance[MaxClipPlaneCount];
+
 layout(location = 0) out vec4 out_Normal;
 layout(location = 1) out vec4 out_Texcoord0;
 layout(location = 2) out vec4 out_Texcoord1;
@@ -88,17 +89,18 @@ struct D3D9FixedFunctionVS {
     mat4 NormalMatrix;
     mat4 InverseView;
     mat4 Projection;
+    mat4 WorldViewProj;
 
     mat4 TexcoordMatrices[TextureStageCount];
 
     D3D9ViewportInfo ViewportInfo;
 
-    vec4 GlobalAmbient;
     D3D9Light Lights[MaxEnabledLights];
     D3DMATERIAL9 Material;
+    uint GlobalAmbient;
     float TweenFactor;
 
-    uint KeyPrimitives[4];
+    uint DataPrimitives[12];
 };
 
 #define D3D9FF_VertexBlendMode uint
@@ -128,133 +130,153 @@ const uint DXVK_TSS_TCI_SPHEREMAP                   = 0x00040000;
 const uint TCIOffset = 16;
 const uint TCIMask = (7 << TCIOffset);
 
+// Number of active clipping planes
+uint getClipPlaneCount() {
+    return bitfieldExtract(alphaTestAndModeArgs, 16, 3);
+}
 
-// Bindings have to match with computeResourceSlotId in dxso_util.h
-// computeResourceSlotId(
-//     D3D9ShaderType::VertexShader,
-//     DxsoBindingType::ConstantBuffer,
-//     DxsoConstantBuffers::VSFixedFunction
-// ) = 4
-layout(set = 0, binding = 4, scalar, row_major) uniform ShaderData {
+// Checks whether point scaling is
+bool isPointScalingEnabled() {
+    return bitfieldExtract(packedProjMaskAndFfArgs, 16, 1) != 0;
+}
+
+// Checks whether active pixel shader is SM3
+bool boundPsIsShaderModel3() {
+    return bitfieldExtract(packedProjMaskAndFfArgs, 24, 1) != 0;
+}
+
+// Checks sampler projection state without accessing all sampler state
+bool isSamplerProjected(uint idx) {
+    return bitfieldExtract(packedProjMaskAndFfArgs, int(idx), 1) != 0;
+}
+
+layout(set = CBV_SET, binding = CBV_VS_FIXED_FUNCTION, scalar, row_major)
+uniform ShaderData {
     D3D9FixedFunctionVS data;
 };
 
-layout(push_constant, scalar, row_major) uniform RenderStates {
-    D3D9RenderStateInfo rs;
-};
-
-// Bindings have to match with computeResourceSlotId in dxso_util.h
-// computeResourceSlotId(
-//     D3D9ShaderType::VertexShader,
-//     DxsoBindingType::ConstantBuffer,
-//     DxsoConstantBuffers::VSVertexBlendData
-// ) = 5
-layout(set = 0, binding = 5, std140, row_major) readonly buffer VertexBlendData {
+layout(set = CBV_SET, binding = CBV_VS_VERTEX_BLEND, std140, row_major)
+readonly buffer VertexBlendData {
     mat4 WorldViewArray[];
 };
 
-
-// Bindings have to match with computeResourceSlotId in dxso_util.h
-// computeResourceSlotId(
-//     D3D9ShaderType::VertexShader,
-//     DxsoBindingType::ConstantBuffer,
-//     DxsoConstantBuffers::VSClipPlanes
-// ) = 3
-layout(set = 0, binding = 3, std140) uniform ClipPlanes {
+layout(set = CBV_SET, binding = CBV_VS_CLIP_PLANES, std140)
+uniform ClipPlanes {
     vec4 clipPlanes[MaxClipPlaneCount];
 };
 
+layout(push_constant, scalar, row_major)
+uniform RenderStates {
+    D3D9SharedPushData global;
 
-// Functions to extract information from the packed VS key
-// See D3D9FFShaderKeyVSData in d3d9_shader_types.h
+    layout(offset = MaxSharedPushDataSize)
+    D3D9VsPushData vs;
+    D3D9FfvsPushData ffvs;
+};
+
+// Return point size, min, max as raw float
+vec3 decodePointSize() {
+    uvec3 pointData = uvec3(
+        bitfieldExtract(vs.packedReservedAndPointSize, 16, 16),
+        bitfieldExtract(vs.packedPointSizeMinMax,  0, 16),
+        bitfieldExtract(vs.packedPointSizeMinMax, 16, 16));
+    return vec3(pointData) / 8.0f;
+}
+
+// Functions to extract information from the VS data
+// We can't use bools or uint8_t so we have to do this.
+// Storing every single bool as a 32 bit integer would make the buffer a little too huge.
+// See D3D9PackedFFVSData in d3d9_state.h
 // Please, dearest compiler, inline all of this.
-uint texcoordIndices() {
-    return bitfieldExtract(data.KeyPrimitives[0], 0, 24);
+
+uint extractByte(uint offset) {
+    uint dword = data.DataPrimitives[offset / 4u];
+    return bitfieldExtract(dword, (int(offset) % 4) * 8, 8);
+}
+
+uint texcoordIndex(uint index) {
+    return extractByte(index);
 }
 bool vertexHasPositionT() {
-    return bitfieldExtract(data.KeyPrimitives[0], 24, 1) != 0;
+    return extractByte(28) != 0;
 }
 bool vertexHasColor0() {
-    return bitfieldExtract(data.KeyPrimitives[0], 25, 1) != 0;
+    return extractByte(29) != 0;
 }
 bool vertexHasColor1() {
-    return bitfieldExtract(data.KeyPrimitives[0], 26, 1) != 0;
+    return extractByte(30) != 0;
 }
 bool vertexHasPointSize() {
-    return bitfieldExtract(data.KeyPrimitives[0], 27, 1) != 0;
+    return extractByte(31) != 0;
 }
 bool useLighting() {
-    return bitfieldExtract(data.KeyPrimitives[0], 28, 1) != 0;
+    return extractByte(40) != 0;
 }
 bool normalizeNormals() {
-    return bitfieldExtract(data.KeyPrimitives[0], 29, 1) != 0;
+    return extractByte(37) != 0;
 }
 bool localViewer() {
-    return bitfieldExtract(data.KeyPrimitives[0], 30, 1) != 0;
+    return extractByte(38) != 0;
 }
 bool rangeFog() {
-    return bitfieldExtract(data.KeyPrimitives[0], 31, 1) != 0;
+    return extractByte(39) != 0;
 }
 
-uint texcoordFlags() {
-    return bitfieldExtract(data.KeyPrimitives[1], 0, 24);
+uint texcoordFlags(uint index) {
+    return extractByte(TextureStageCount + index);
 }
 uint diffuseSource() {
-    return bitfieldExtract(data.KeyPrimitives[1], 24, 2);
+    return extractByte(42);
 }
 uint ambientSource() {
-    return bitfieldExtract(data.KeyPrimitives[1], 26, 2);
+    return extractByte(43);
 }
 uint specularSource() {
-    return bitfieldExtract(data.KeyPrimitives[1], 28, 2);
+    return extractByte(44);
 }
 uint emissiveSource() {
-    return bitfieldExtract(data.KeyPrimitives[1], 30, 2);
+    return extractByte(45);
 }
 
-uint transformFlags() {
-    return bitfieldExtract(data.KeyPrimitives[2], 0, 24);
+uint texcoordTransformFlags(uint index) {
+    return extractByte(TextureStageCount * 2 + index);
 }
 uint lightCount() {
-    return bitfieldExtract(data.KeyPrimitives[2], 24, 4);
-}
-bool specularEnabled() {
-    return bitfieldExtract(data.KeyPrimitives[2], 28, 1) != 0;
+    return extractByte(41);
 }
 
 uint vertexTexcoordDeclMask() {
-    return bitfieldExtract(data.KeyPrimitives[3], 0, 24);
+    return data.DataPrimitives[24 / 4];
 }
 bool vertexHasFog() {
-    return bitfieldExtract(data.KeyPrimitives[3], 24, 1) != 0;
+    return extractByte(32) != 0;
 }
 D3D9FF_VertexBlendMode blendMode() {
-    return bitfieldExtract(data.KeyPrimitives[3], 25, 2);
+    return extractByte(33);
 }
 bool vertexBlendIndexed() {
-    return bitfieldExtract(data.KeyPrimitives[3], 27, 1) != 0;
+    return extractByte(34) != 0;
 }
 uint vertexBlendCount() {
-    return bitfieldExtract(data.KeyPrimitives[3], 28, 2);
+    return extractByte(35);
 }
 bool vertexClipping() {
-    return bitfieldExtract(data.KeyPrimitives[3], 30, 1) != 0;
+    return extractByte(36) != 0;
 }
 
 
-float calculateFog(vec4 vPos, vec4 oColor) {
+float calculateFog(vec4 vPos) {
+    FogState fogState = getFogState();
+
     vec4 specular = in_Color1;
     bool hasSpecular = vertexHasColor1();
 
-    vec3 fogColor = vec3(rs.fogColor[0], rs.fogColor[1], rs.fogColor[2]);
-    float fogScale = rs.fogScale;
-    float fogEnd = rs.fogEnd;
-    float fogDensity = rs.fogDensity;
-    D3DFOGMODE fogMode = specUint(SpecVertexFogMode);
-    bool fogEnabled = specBool(SpecFogEnabled);
-    if (!fogEnabled) {
+    float fogScale = global.fogDistanceScale;
+    float fogEnd = global.fogDistanceEnd;
+    float fogDensity = global.fogDensity;
+
+    if (!fogState.enable)
         return 0.0;
-    }
 
     float w = vPos.w;
     float z = vPos.z;
@@ -269,7 +291,8 @@ float calculateFog(vec4 vPos, vec4 oColor) {
     if (vertexHasPositionT()) {
         fogFactor = hasSpecular ? specular.w : 1.0;
     } else {
-        switch (fogMode) {
+        switch (fogState.vertexMode) {
+            default:
             case D3DFOG_NONE:
                 fogFactor = hasSpecular ? specular.w : 1.0;
                 break;
@@ -287,7 +310,7 @@ float calculateFog(vec4 vPos, vec4 oColor) {
             case D3DFOG_EXP:
                 fogFactor = depth * fogDensity;
 
-                if (fogMode == D3DFOG_EXP2)
+                if (fogState.vertexMode == D3DFOG_EXP2)
                     fogFactor *= fogFactor;
 
                 // Provides the rcp.
@@ -302,12 +325,13 @@ float calculateFog(vec4 vPos, vec4 oColor) {
 
 
 float calculatePointSize(vec4 vtx) {
-    float value = vertexHasPointSize() ? in_PointSize : rs.pointSize;
-    uint pointMode = specUint(SpecPointMode);
-    bool isScale = bitfieldExtract(pointMode, 0, 1) != 0;
-    float scaleC = rs.pointScaleC;
-    float scaleB = rs.pointScaleB;
-    float scaleA = rs.pointScaleA;
+    vec3 pointSizeArgs = decodePointSize();
+
+    float value = vertexHasPointSize() ? in_PointSize : pointSizeArgs.x;
+
+    float scaleC = ffvs.pointScaleC;
+    float scaleB = ffvs.pointScaleB;
+    float scaleA = ffvs.pointScaleA;
 
     vec3 vtx3 = vtx.xyz;
 
@@ -319,29 +343,39 @@ float calculatePointSize(vec4 vtx) {
     scaleValue = sqrt(scaleValue);
     scaleValue = value / scaleValue;
 
-    value = isScale ? scaleValue : value;
+    value = isPointScalingEnabled() ? scaleValue : value;
 
-    float pointSizeMin = rs.pointSizeMin;
-    float pointSizeMax = rs.pointSizeMax;
+    float pointSizeMin = pointSizeArgs.y;
+    float pointSizeMax = pointSizeArgs.z;
 
     return clamp(value, pointSizeMin, pointSizeMax);
 }
 
+// Precise dot product and matrix-vector product helpers. This needs to match
+// programmable shaders since some games rely on fixed-function and programmable
+// VS producing identical vertex positions (e.g. Railroad Tycoon 3).
+precise float dp4(vec4 a, vec4 b) {
+    return fma(a.w, b.w, fma(a.z, b.z, fma(a.y, b.y, a.x * b.x)));
+}
+
+precise vec4 vecTimesMat4(vec4 a, mat4 b) {
+    return vec4(dp4(a, b[0]), dp4(a, b[1]),
+                dp4(a, b[2]), dp4(a, b[3]));
+}
+
+float mul_legacy(float a, float b) {
+    return (b == 0.0f ? 0.0f : a) * (a == 0.0f ? 0.0f : b);
+}
 
 void emitVsClipping(vec4 vtx) {
     vec4 worldPos = data.InverseView * vtx;
 
     // Always consider clip planes enabled when doing GPL by forcing 6 for the quick value.
-    uint clipPlaneCount = specUint(SpecClipPlaneCount);
+    uint clipPlaneCount = getClipPlaneCount();
 
     // Compute clip distances
-    for (uint i = 0; i < MaxClipPlaneCount; i++) {
-        vec4 clipPlane = clipPlanes[i];
-        float dist = dot(worldPos, clipPlane);
-        bool clipPlaneEnabled = i < clipPlaneCount;
-        float value = clipPlaneEnabled ? dist : 0.0;
-        gl_ClipDistance[i] = value;
-    }
+    for (uint i = 0u; i < MaxClipPlaneCount; i++)
+        gl_ClipDistance[i] = i < clipPlaneCount ? dp4(worldPos, clipPlanes[i]) : 0.0;
 }
 
 
@@ -355,227 +389,221 @@ vec4 pickMaterialSource(uint source, vec4 material) {
 }
 
 
-void main() {
-    vec4 vtx = in_Position0;
-    gl_Position = in_Position0;
-    vec3 normal = in_Normal0.xyz;
+struct Vertex {
+    vec4 coord;
+    vec4 transformed;
+    vec3 normal;
+};
+
+
+Vertex transformVertex() {
+    Vertex result;
+    result.coord = in_Position0;
+    result.normal = in_Normal0.xyz;
 
     if (blendMode() == D3D9FF_VertexBlendMode_Tween) {
-        vec4 vtx1 = in_Position1;
-        vec3 normal1 = in_Normal1.xyz;
-        vtx = mix(vtx, vtx1, data.TweenFactor);
-        normal = mix(normal, normal1, data.TweenFactor);
+        result.coord = mix(result.coord, in_Position1, data.TweenFactor);
+        result.normal = mix(result.normal, in_Normal1.xyz, data.TweenFactor);
     }
 
     if (!vertexHasPositionT()) {
         if (blendMode() == D3D9FF_VertexBlendMode_Normal) {
             float blendWeightRemaining = 1.0;
+
             vec4 vtxSum = vec4(0.0);
             vec3 nrmSum = vec3(0.0);
 
             for (uint i = 0; i <= vertexBlendCount(); i++) {
-                uint arrayIndex;
-                if (vertexBlendIndexed()) {
-                    arrayIndex = uint(round(in_BlendIndices[i]));
-                } else {
-                    arrayIndex = i;
-                }
+                uint arrayIndex = i;
+
+                if (vertexBlendIndexed())
+                    arrayIndex = uint(roundEven(in_BlendIndices[i]));
+
                 mat4 worldView = WorldViewArray[arrayIndex];
+                mat3 nrmMtx = mat3(worldView);
 
-                mat3 nrmMtx;
-                for (uint j = 0; j < 3; j++) {
-                    nrmMtx[j] = worldView[j].xyz;
-                }
+                vec4 vtxResult = vecTimesMat4(result.coord, worldView);
+                vec3 nrmResult = result.normal * nrmMtx;
 
-                vec4 vtxResult = vtx * worldView;
-                vec3 nrmResult = normal * nrmMtx;
+                float weight = blendWeightRemaining;
 
-                float weight;
-                if (i != vertexBlendCount()) {
+                if (i < vertexBlendCount()) {
                     weight = in_BlendWeight[i];
                     blendWeightRemaining -= weight;
-                } else {
-                    weight = blendWeightRemaining;
                 }
 
-                vec4 weightVec4 = vec4(weight, weight, weight, weight);
-
-                vtxSum = fma(vtxResult, weightVec4, vtxSum);
-                nrmSum = fma(nrmResult, weightVec4.xyz, nrmSum);
+                vtxSum = fma(vtxResult, weight.xxxx, vtxSum);
+                nrmSum = fma(nrmResult, weight.xxx, nrmSum);
             }
 
-            vtx = vtxSum;
-            normal = nrmSum;
+            result.coord = vtxSum;
+            result.normal = nrmSum;
+            result.transformed = vecTimesMat4(result.coord, data.Projection);
         } else {
-            vtx = vtx * data.WorldView;
-
-            mat3 nrmMtx = mat3(data.NormalMatrix);
-
-            normal = nrmMtx * normal;
+            // Apply pre-multiplied world-view-projection matrix, Railroad Tycoon 3
+            // relies on this and will break if we apply matrices one by one.
+            result.transformed = vecTimesMat4(result.coord, data.WorldViewProj);
+            result.coord = vecTimesMat4(result.coord, data.WorldView);
+            result.normal = mat3(data.NormalMatrix) * result.normal;
         }
 
-        // Some games rely on normals not being normal.
         if (normalizeNormals()) {
-            bool isZeroNormal = all(equal(normal, vec3(0.0, 0.0, 0.0)));
-            normal = isZeroNormal ? normal : normalize(normal);
+            float normalScale = inversesqrt(dot(result.normal, result.normal));
+            result.normal.x = mul_legacy(result.normal.x, normalScale);
+            result.normal.y = mul_legacy(result.normal.y, normalScale);
+            result.normal.z = mul_legacy(result.normal.z, normalScale);
         }
 
-        gl_Position = vtx * data.Projection;
+        return result;
     } else {
-        gl_Position *= data.ViewportInfo.inverseExtent;
-        gl_Position += data.ViewportInfo.inverseOffset;
-
         // We still need to account for perspective correction here...
+        result.transformed = fma(result.coord, data.ViewportInfo.inverseExtent, data.ViewportInfo.inverseOffset);
 
-        float w = gl_Position.w;
-        float rhw = w == 0.0 ? 1.0 : 1.0 / w;
-        gl_Position.xyz *= rhw;
-        gl_Position.w = rhw;
+        float rhw = result.transformed.w == 0.0 ? 1.0 : 1.0 / result.transformed.w;
+        result.transformed.xyz *= rhw;
+        result.transformed.w = rhw;
+        return result;
     }
+}
 
-    vec4 outNrm = vec4(normal, 1.0);
-    out_Normal = outNrm;
 
-    vec4 texCoords[TextureStageCount];
-    texCoords[0] = in_Texcoord0;
-    texCoords[1] = in_Texcoord1;
-    texCoords[2] = in_Texcoord2;
-    texCoords[3] = in_Texcoord3;
-    texCoords[4] = in_Texcoord4;
-    texCoords[5] = in_Texcoord5;
-    texCoords[6] = in_Texcoord6;
-    texCoords[7] = in_Texcoord7;
+vec4 loadTexcoord(uint idx) {
+    vec4 result = vec4(0.0f);
+    result = mix(result, in_Texcoord0, bvec4(idx == 0u));
+    result = mix(result, in_Texcoord1, bvec4(idx == 1u));
+    result = mix(result, in_Texcoord2, bvec4(idx == 2u));
+    result = mix(result, in_Texcoord3, bvec4(idx == 3u));
+    result = mix(result, in_Texcoord4, bvec4(idx == 4u));
+    result = mix(result, in_Texcoord5, bvec4(idx == 5u));
+    result = mix(result, in_Texcoord6, bvec4(idx == 6u));
+    result = mix(result, in_Texcoord7, bvec4(idx == 7u));
+    return result;
+}
 
-    vec4 transformedTexCoords[TextureStageCount];
 
-    for (uint i = 0; i < TextureStageCount; i++) {
-        // 0b111 = 7
-        uint inputIndex = (texcoordIndices() >> (i * 3)) & 7;
-        uint inputFlags = (texcoordFlags() >> (i * 3)) & 7;
-        uint texcoordCount = (vertexTexcoordDeclMask() >> (inputIndex * 3)) & 7;
+float vectorExtract(vec4 vector, uint idx) {
+    float result = vector.x;
+    result = mix(result, vector.y, idx == 1u);
+    result = mix(result, vector.z, idx == 2u);
+    result = mix(result, vector.w, idx == 3u);
+    return result;
+}
 
-        vec4 transformed;
 
-        uint flags = (transformFlags() >> (i * 3)) & 7;
+vec4 transformTexCoord(uint idx, vec4 vertex, vec3 normal) {
+    // 0b111 = 7
+    uint inputIndex = texcoordIndex(idx);
+    uint inputFlags = texcoordFlags(idx) << TCIOffset;
+    uint texcoordCount = bitfieldExtract(vertexTexcoordDeclMask(), int(inputIndex) * 3, 3);
 
-        // Passing 0xffffffff results in it getting clamped to the dimensions of the texture coords and getting treated as PROJECTED
-        // but D3D9 does not apply the transformation matrix.
-        bool applyTransform = flags > D3DTTFF_COUNT1 && flags <= D3DTTFF_COUNT4;
+    vec4 transformed = vec4(0.0f);
 
-        uint count = min(flags, 4u);
+    uint flags = texcoordTransformFlags(idx);
 
-        // A projection component index of 4 means we won't do projection
-        uint projIndex = count != 0 ? count - 1 : 4;
+    // Passing 0xffffffff results in it getting clamped to the dimensions of the texture coords and getting treated as PROJECTED
+    // but D3D9 does not apply the transformation matrix.
+    bool applyTransform = flags > D3DTTFF_COUNT1 && flags <= D3DTTFF_COUNT4;
 
-        switch (inputFlags) {
-            default:
-            case (DXVK_TSS_TCI_PASSTHRU >> TCIOffset):
-                transformed = texCoords[inputIndex & 0xFF];
+    uint count = min(flags, 4u);
 
-                if (texcoordCount < 4) {
-                    // Vulkan sets the w component to 1.0 if that's not provided by the vertex buffer, D3D9 expects 0 here
-                    transformed.w = 0.0;
-                }
+    // A projection component index of 4 means we won't do projection
+    uint projIndex = count != 0u ? count - 1u : 4u;
 
-                if (applyTransform && !vertexHasPositionT()) {
-                    /*This doesn't happen every time and I cannot figure out the difference between when it does and doesn't.
-                    Keep it disabled for now, it's more likely that games rely on the zero texcoord than the weird 1 here.
-                    if (texcoordCount <= 1) {
-                      // y gets padded to 1 for some reason
-                      transformed.y = 1.0;
-                    }*/
+    switch (inputFlags) {
+        default:
+        case DXVK_TSS_TCI_PASSTHRU:
+            transformed = loadTexcoord(inputIndex & 0xffu);
 
-                    if (texcoordCount >= 1 && texcoordCount < 4) {
-                        // The first component after the last one thats backed by a vertex buffer gets padded to 1 for some reason.
-                        uint idx = texcoordCount;
-                        transformed[idx] = 1.0;
-                    }
-                } else if (texcoordCount != 0 && !applyTransform) {
-                    // COUNT0, COUNT1, COUNT > 4 => take count from vertex decl if that's not zero
-                    count = texcoordCount;
-                }
-
-                projIndex = count != 0 ? count - 1 : 4;
-                break;
-
-            case (DXVK_TSS_TCI_CAMERASPACENORMAL >> TCIOffset):
-                transformed = outNrm;
-                if (!applyTransform) {
-                    count = 3;
-                    projIndex = 4;
-                }
-                break;
-
-            case (DXVK_TSS_TCI_CAMERASPACEPOSITION >> TCIOffset):
-                transformed = vtx;
-                if (!applyTransform) {
-                    count = 3;
-                    projIndex = 4;
-                }
-                break;
-
-            case (DXVK_TSS_TCI_CAMERASPACEREFLECTIONVECTOR >> TCIOffset): {
-                vec3 vtx3 = vtx.xyz;
-                vtx3 = normalize(vtx3);
-
-                vec3 reflection = reflect(vtx3, normal);
-                transformed = vec4(reflection, 1.0);
-                if (!applyTransform) {
-                    count = 3;
-                    projIndex = 4;
-                }
-                break;
+            if (texcoordCount < 4u) {
+                // Vulkan sets the w component to 1.0 if that's not provided by the vertex buffer, D3D9 expects 0 here
+                transformed.w = 0.0;
             }
 
-            case (DXVK_TSS_TCI_SPHEREMAP >> TCIOffset): {
-                vec3 vtx3 = vtx.xyz;
-                vtx3 = normalize(vtx3);
+            if (applyTransform && !vertexHasPositionT()) {
+                /*This doesn't happen every time and I cannot figure out the difference between when it does and doesn't.
+                Keep it disabled for now, it's more likely that games rely on the zero texcoord than the weird 1 here.
+                if (texcoordCount <= 1) {
+                    // y gets padded to 1 for some reason
+                    transformed.y = 1.0;
+                }*/
 
-                vec3 reflection = reflect(vtx3, normal);
-                float m = length(reflection + vec3(0.0, 0.0, 1.0)) * 2.0;
-
-                transformed = vec4(
-                    reflection.x / m + 0.5,
-                    reflection.y / m + 0.5,
-                    0.0,
-                    1.0
-                );
-                break;
+                // The first component after the last one thats backed by a vertex buffer gets padded to 1 for some reason.
+                if (texcoordCount >= 1u)
+                    transformed = mix(transformed, vec4(1.0f), equal(uvec4(0u, 1u, 2u, 3u), texcoordCount.xxxx));
+            } else if (texcoordCount != 0 && !applyTransform) {
+                // COUNT0, COUNT1, COUNT > 4 => take count from vertex decl if that's not zero
+                count = texcoordCount;
             }
+
+            projIndex = count != 0u ? count - 1u : 4u;
+            break;
+
+        case DXVK_TSS_TCI_CAMERASPACENORMAL:
+            transformed = vec4(normal, 1.0f);
+
+            if (!applyTransform) {
+                count = 3u;
+                projIndex = 4u;
+            }
+            break;
+
+        case DXVK_TSS_TCI_CAMERASPACEPOSITION:
+            transformed = vertex;
+            if (!applyTransform) {
+                count = 3u;
+                projIndex = 4u;
+            }
+            break;
+
+        case DXVK_TSS_TCI_CAMERASPACEREFLECTIONVECTOR: {
+            vec3 reflection = reflect(normalize(vertex.xyz), normal);
+            transformed = vec4(reflection, 1.0f);
+
+            if (!applyTransform) {
+                count = 3u;
+                projIndex = 4u;
+            }
+
+            break;
         }
 
-        if (applyTransform && !vertexHasPositionT()) {
-            transformed = transformed * data.TexcoordMatrices[i];
+        case DXVK_TSS_TCI_SPHEREMAP: {
+            vec3 reflection = reflect(normalize(vertex.xyz), normal);
+
+            float m = length(reflection + vec3(0.0f, 0.0f, 1.0f)) * 2.0f;
+            transformed = vec4(reflection.xy / m + 0.5f, 0.0f, 1.0f);
+            break;
         }
-
-        // TODO: Shouldn't projected be checked per texture stage?
-        if (specUint(SpecSamplerProjected) != 0u && projIndex < 4) {
-            // The projection idx is always based on the flags, even when the input mode is not DXVK_TSS_TCI_PASSTHRU.
-            float projValue = transformed[projIndex];
-
-            // The w component is only used for projection or unused, so always insert the component that's supposed to be divided by there.
-            // The fragment shader will then decide whether to project or not.
-            transformed.w = projValue;
-        }
-
-        // TODO: Shouldn't projected be checked per texture stage?
-        uint totalComponents = (specUint(SpecSamplerProjected) != 0u && projIndex < 4) ? 3 : 4;
-        for (uint j = count; j < totalComponents; j++) {
-            // Discard the components that exceed the specified D3DTTFF_COUNT
-            transformed[j] = 0.0;
-        }
-
-        transformedTexCoords[i] = transformed;
     }
 
-    out_Texcoord0 = transformedTexCoords[0];
-    out_Texcoord1 = transformedTexCoords[1];
-    out_Texcoord2 = transformedTexCoords[2];
-    out_Texcoord3 = transformedTexCoords[3];
-    out_Texcoord4 = transformedTexCoords[4];
-    out_Texcoord5 = transformedTexCoords[5];
-    out_Texcoord6 = transformedTexCoords[6];
-    out_Texcoord7 = transformedTexCoords[7];
+    if (applyTransform && !vertexHasPositionT())
+        transformed = transformed * data.TexcoordMatrices[idx];
+
+    // Discard the components that exceed the specified D3DTTFF_COUNT
+    vec4 result = mix(transformed, vec4(0.0f), lessThan(count.xxxx, uvec4(1u, 2u, 3u, 4u)));
+
+    if (isSamplerProjected(idx) && projIndex < 4u) {
+        // The projection idx is always based on the flags, even when the input
+        // mode is not DXVK_TSS_TCI_PASSTHRU. The w component is only used for
+        // projection or unused, so always insert the divisor there. The pixel
+        // shader will then decide whether to project or not.
+        result.w = vectorExtract(transformed, projIndex);
+    }
+
+    return result;
+}
+
+
+struct Lighting {
+    vec4 diffuse;
+    vec4 specular;
+};
+
+
+Lighting computeLighting(vec4 vertex, vec3 normal) {
+    Lighting result;
+    result.diffuse = vertexHasColor0() ? in_Color0 : vec4(1.0, 1.0, 1.0, 1.0);
+    result.specular = vertexHasColor1() ? in_Color1 : vec4(0.0, 0.0, 0.0, boundPsIsShaderModel3() ? 0.0 : 1.0);
 
     if (useLighting()) {
         vec4 diffuseValue = vec4(0.0);
@@ -585,89 +613,65 @@ void main() {
         for (uint i = 0; i < lightCount(); i++) {
             D3D9Light light = data.Lights[i];
 
-            vec4 diffuse = light.Diffuse;
-            vec4 specular = light.Specular;
-            vec4 ambient = light.Ambient;
-            vec3 position = light.Position.xyz;
-            vec3 direction = light.Direction.xyz;
-            uint type = light.Type;
-            float range = light.Range;
-            float falloff = light.Falloff;
-            float atten0 = light.Attenuation0;
-            float atten1 = light.Attenuation1;
-            float atten2 = light.Attenuation2;
-            float theta = light.Theta;
-            float phi = light.Phi;
+            vec3 delta = light.Position.xyz - vertex.xyz;
+            float dist = length(delta);
 
-            bool isSpot = type == D3DLIGHT_SPOT;
-            bool isDirectional = type == D3DLIGHT_DIRECTIONAL;
+            // Directional light properties
+            vec3 hitDir = -light.Direction.xyz;
+            float atten = 1.0f;
 
-            bvec3 isDirectional3 = bvec3(isDirectional);
+            if (light.Type != D3DLIGHT_DIRECTIONAL) {
+                // Range-based attenuation
+                atten = fma(dist, light.Attenuation2, light.Attenuation1);
+                atten = fma(dist, atten, light.Attenuation0);
+                atten = 1.0 / atten;
+                atten = spvNMin(atten, FloatMaxValue);
+                atten = dist > light.Range ? 0.0 : atten;
 
-            vec3 vtx3 = vtx.xyz;
+                hitDir = normalize(delta);
+            }
 
-            vec3 delta = position - vtx3;
-            float d = length(delta);
-            vec3 hitDir = -direction;
-                 hitDir = mix(delta, hitDir, isDirectional3);
-                 hitDir = normalize(hitDir);
+            if (light.Type == D3DLIGHT_SPOT) {
+                // Angle-based attenuation
+                float rho = dot(-hitDir, light.Direction.xyz);
+                float spotAtten = rho - light.Phi;
+                      spotAtten = spotAtten / (light.Theta - light.Phi);
+                      spotAtten = pow(spotAtten, light.Falloff);
 
-            float atten = fma(d, atten2, atten1);
-                  atten = fma(d, atten, atten0);
-                  atten = 1.0 / atten;
-                  atten = spvNMin(atten, FloatMaxValue);
-
-                  atten = d > range ? 0.0 : atten;
-                  atten = isDirectional ? 1.0 : atten;
-
-            // Spot Lighting
-            {
-                float rho = dot(-hitDir, direction);
-                float spotAtten = rho - phi;
-                      spotAtten = spotAtten / (theta - phi);
-                      spotAtten = pow(spotAtten, falloff);
-
-                bool insideThetaAndPhi = rho <= theta;
-                bool insidePhi = rho > phi;
+                bool insideThetaAndPhi = rho <= light.Theta;
+                bool insidePhi = rho > light.Phi;
                      spotAtten = insidePhi ? spotAtten : 0.0;
                      spotAtten = insideThetaAndPhi ? spotAtten : 1.0;
                      spotAtten = clamp(spotAtten, 0.0, 1.0);
 
-                     spotAtten = atten * spotAtten;
-                     atten     = isSpot ? spotAtten : atten;
+                atten *= spotAtten;
             }
 
+            // Ambient + Diffuse
             float hitDot = dot(normal, hitDir);
                   hitDot = clamp(hitDot, 0.0, 1.0);
 
             float diffuseness = hitDot * atten;
+            ambientValue += light.Ambient * atten;
+            diffuseValue += light.Diffuse * diffuseness;
 
+            // Specular
             vec3 mid;
+
             if (localViewer()) {
-                mid = normalize(vtx3);
+                mid = normalize(vertex.xyz);
                 mid = hitDir - mid;
             } else {
                 mid = hitDir - vec3(0.0, 0.0, 1.0);
             }
 
-            mid = normalize(mid);
-
-            float midDot = dot(normal, mid);
+            float midDot = dot(normal, normalize(mid));
                   midDot = clamp(midDot, 0.0, 1.0);
-            bool doSpec = midDot > 0.0;
-                 doSpec = doSpec && hitDot > 0.0;
 
-            float specularness = pow(midDot, data.Material.Power);
-                  specularness *= atten;
-                  specularness = doSpec ? specularness : 0.0;
-
-            vec4 lightAmbient  = ambient * atten;
-            vec4 lightDiffuse  = diffuse * diffuseness;
-            vec4 lightSpecular = specular * specularness;
-
-            ambientValue  += lightAmbient;
-            diffuseValue  += lightDiffuse;
-            specularValue += lightSpecular;
+            if (midDot > 0.0 && hitDot > 0.0) {
+                float specularness = pow(midDot, data.Material.Power) * atten;
+                specularValue += light.Specular * specularness;
+            }
         }
 
         vec4 matDiffuse  = pickMaterialSource(diffuseSource(), data.Material.Diffuse);
@@ -675,7 +679,7 @@ void main() {
         vec4 matEmissive = pickMaterialSource(emissiveSource(), data.Material.Emissive);
         vec4 matSpecular = pickMaterialSource(specularSource(), data.Material.Specular);
 
-        vec4 finalColor0 = fma(matAmbient, data.GlobalAmbient, matEmissive);
+        vec4 finalColor0 = fma(matAmbient, decodeD3DColor(data.GlobalAmbient), matEmissive);
              finalColor0 = fma(matAmbient, ambientValue, finalColor0);
              finalColor0 = fma(matDiffuse, diffuseValue, finalColor0);
              finalColor0.a = matDiffuse.a;
@@ -684,27 +688,40 @@ void main() {
 
         // Saturate
         finalColor0 = clamp(finalColor0, vec4(0.0), vec4(1.0));
-
         finalColor1 = clamp(finalColor1, vec4(0.0), vec4(1.0));
 
-        out_Color0 = finalColor0;
-        if (specularEnabled()) {
-            out_Color1 = finalColor1;
-        } else {
-            out_Color1 = vertexHasColor1() ? in_Color1 : vec4(0.0, 0.0, 0.0, 1.0);
-            // TODO: SM3 behavior, see below.
-        }
-    } else {
-        out_Color0 = vertexHasColor0() ? in_Color0 : vec4(1.0, 1.0, 1.0, 1.0);
-        out_Color1 = vertexHasColor1() ? in_Color1 : vec4(0.0, 0.0, 0.0, 1.0);
-        // TODO: If it's used with a SM3 PS, we need to export 0,0,0,0 as the default for color1.
-        //       Implement that using a spec constant.
+        result.diffuse = finalColor0;
+
+        if (isSpecularEnabled())
+            result.specular = finalColor1;
     }
 
-    out_Fog = calculateFog(vtx, vec4(0.0));
+    return result;
+}
 
-    gl_PointSize = calculatePointSize(vtx);
 
-    // We statically declare 6 clip planes, so we always need to write values.
-    emitVsClipping(vtx);
+void main() {
+    Vertex vtx = transformVertex();
+
+    gl_Position = vtx.transformed;
+    gl_PointSize = calculatePointSize(vtx.coord);
+
+    emitVsClipping(vtx.coord);
+
+    out_Normal = vec4(vtx.normal, 1.0);
+
+    out_Texcoord0 = transformTexCoord(0u, vtx.coord, vtx.normal);
+    out_Texcoord1 = transformTexCoord(1u, vtx.coord, vtx.normal);
+    out_Texcoord2 = transformTexCoord(2u, vtx.coord, vtx.normal);
+    out_Texcoord3 = transformTexCoord(3u, vtx.coord, vtx.normal);
+    out_Texcoord4 = transformTexCoord(4u, vtx.coord, vtx.normal);
+    out_Texcoord5 = transformTexCoord(5u, vtx.coord, vtx.normal);
+    out_Texcoord6 = transformTexCoord(6u, vtx.coord, vtx.normal);
+    out_Texcoord7 = transformTexCoord(7u, vtx.coord, vtx.normal);
+
+    Lighting lighting = computeLighting(vtx.coord, vtx.normal);
+    out_Color0 = lighting.diffuse;
+    out_Color1 = lighting.specular;
+
+    out_Fog = calculateFog(vtx.coord);
 }

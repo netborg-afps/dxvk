@@ -11,8 +11,11 @@ namespace dxvk {
   class D3D9VertexDecl;
   class D3D9DeviceEx;
 
-  struct D3D9SwvpEmuArgs {
-    uint32_t exportOffset;
+  struct D3D9SwvpShaderArgs {
+    float viewportX;
+    float viewportY;
+    float viewportW;
+    float viewportH;
   };
 
   struct D3D9CompactVertexElement {

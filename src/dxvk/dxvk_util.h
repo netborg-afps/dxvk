@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxvk_include.h"
+#include "dxvk_limits.h"
 
 namespace dxvk::util {
 
@@ -62,6 +63,9 @@ namespace dxvk::util {
     DxvkBuiltInShaderStage(const uint32_t (&dwords)[N], const VkSpecializationInfo* s)
     : size(N * sizeof(uint32_t)), code(&dwords[0]), spec(s) { }
 
+    DxvkBuiltInShaderStage(const std::vector<uint32_t>& dwords)
+    : size(dwords.size() * sizeof(uint32_t)), code(dwords.data()) { }
+
     size_t                      size = 0u;
     const uint32_t*             code = nullptr;
     const VkSpecializationInfo* spec = nullptr;
@@ -82,7 +86,7 @@ namespace dxvk::util {
     /** Fragment shader. */
     DxvkBuiltInShaderStage fs;
     /** Color attachment format. */
-    VkFormat colorFormat = VK_FORMAT_UNDEFINED;
+    std::array<VkFormat, MaxNumRenderTargets> colorFormats = { };
     /** Depth-stencil attachment format */
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     /** Sample count */

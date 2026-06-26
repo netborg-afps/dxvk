@@ -278,7 +278,7 @@ namespace dxvk {
     /* Crazy Machines 3 - crashes on long device  *
      * descriptions                               */
     { R"(\\cm3\.exe$)", {{
-      { "dxgi.customDeviceDesc",            "DXVK Device" },
+      { "dxgi.customDeviceDesc",     "DXVK Device" },
     }} },
     /* World of Final Fantasy: Broken and useless use     *
      * of 4x MSAA throughout the renderer. Water doesn't  *
@@ -286,7 +286,7 @@ namespace dxvk {
      * us plebs aren't worthy of the divine pixel liquid. */
     { R"(\\WOFF\.exe$)", {{
       { "d3d11.disableMsaa",                "True" },
-      { "dxgi.customDeviceDesc",            "DXVK Device" },
+      { "dxgi.customDeviceDesc",     "DXVK Device" },
     }} },
     /* Mary Skelter 2 - Broken MSAA               */
     { R"(\\MarySkelter2\.exe$)", {{
@@ -362,7 +362,7 @@ namespace dxvk {
     /* The Evil Within 2 *
     * Game speeds up above 120 fps */
     { R"(\\TEW2\.exe$)", {{
-      { "dxgi.maxFrameRate",                 "-120" },
+      { "dxgi.maxFrameRate",                "-120" },
     }} },
     /* Sonic Frontiers - flickering shadows and   *
      * vegetation when GPU-bound                  */
@@ -532,9 +532,11 @@ namespace dxvk {
       { "d3d9.lenientClear",                "True" },
       { "d3d9.supportDFFormats",           "False" },
     }} },
-    /* Gothic 3                                   */
+    /* Gothic 3 - Rendering such as water broken  *
+     * on non strict float path with dxvk 3.0     */
     { R"(\\Gothic(3|3Final| III Forsaken Gods)\.exe$)", {{
       { "d3d9.supportDFFormats",           "False" },
+      { "d3d9.floatEmulation",            "Strict" },
     }} },
     /* Sonic Adventure 2                          */
     { R"(\\Sonic Adventure 2\\(launcher|sonic2app)\.exe$)", {{
@@ -595,9 +597,11 @@ namespace dxvk {
     }} },
     /* Counter Strike: Global Offensive
        Needs NVAPI to avoid a forced AO + Smoke
-       exploit so we must force AMD vendor ID.    */
+       exploit so we must force AMD vendor ID.
+       Also writes to buffer after unlocking it. */
     { R"(\\csgo\.exe$)", {{
       { "d3d9.hideNvidiaGpu",               "True" },
+      { "d3d9.forceDrawTimeBufferUpload",   "True" },
     }} },
     /* Vampire - The Masquerade Bloodlines        */
     { R"(\\vampire\.exe$)", {{
@@ -757,8 +761,8 @@ namespace dxvk {
      * Resolution change crash and cached         *
      * dynamic buffers for performance reasons    */
     { R"(\\eoa\.exe$)", {{
-      { "d3d9.cachedWriteOnlyBuffers",        "True" },
-      { "d3d9.countLosableResources",         "False" },
+      { "d3d9.cachedWriteOnlyBuffers",      "True" },
+      { "d3d9.countLosableResources",      "False" },
     }} },
     /* Supreme Commander & Forged Alliance Forever */
     { R"(\\(SupremeCommander|ForgedAlliance)\.exe$)", {{
@@ -942,7 +946,7 @@ namespace dxvk {
      * in mod New Vegas Reloaded. Nvidia path in  *
      * same mod use NvAPI_D3D9_StretchRectEx for  *
      * depth buffer resolves                      */
-    { R"(\\FalloutNV(Launcher)?\.exe$)", {{
+    { R"(\\Fallout( -)? New Vegas.*\\(FalloutNV)?(Launcher)?\.exe$)", {{
       { "d3d9.floatEmulation",            "Strict" },
       { "d3d9.hideNvidiaGpu",               "True" },
     }} },
@@ -1156,6 +1160,22 @@ namespace dxvk {
     { R"(\\W40k(_gog)?\.exe$)", {{
       { "dxvk.zeroMappedMemory",            "True" },
     }} },
+    /* Insurgency
+       Writes to buffer after unlocking it. */
+    { R"(\\insurgency\.exe$)", {{
+      { "d3d9.forceDrawTimeBufferUpload",   "True" },
+    }} },
+    /* SimCity Societies: Destinations            *
+     * Needs depth format cube texture support    *
+     * in order to start up properly              */
+    { R"(\\SCSDestinations\.exe$)", {{
+      { "d3d9.supportCubeDepthFormats",     "True" },
+    }} },
+    /* Splinter Cell: Double Agent                *
+     * AMD path have a semi or fully black world  */
+    { R"(\\(SplinterCell4|SCDA_online)\.exe$)", {{
+      { "d3d9.hideAmdGpu",                  "True" },
+    }} },
 
     /**********************************************/
     /* D3D8 GAMES                                 */
@@ -1361,6 +1381,21 @@ namespace dxvk {
     { R"(\\Smash up Derby\\cars\.exe$)", {{
       { "d3d9.allowDirectBufferMapping",   "False" },
     }} },
+    /* Age of Pirates: Caribbean Tales            *
+     * Crashes due to a texture UAF otherwise     */
+    { R"(\\(Age of Pirates|Sea Dogs).*Caribbean Tales\\ENGINE\.exe$)", {{
+      { "d3d8.textureUAFGuard",             "True" },
+    }} },
+    /* Age of Pirates 2: City of Abandoned Ships  *
+     * Crashes due to a texture UAF otherwise     */
+    { R"(\\(Age of Pirates|Sea Dogs).*City of Abandoned Ships\\START\.exe$)", {{
+      { "d3d8.textureUAFGuard",             "True" },
+    }} },
+    /* Mafia - Improves poor texture filtering    */
+    { R"(\\Mafia\\Game\.exe$)", {{
+      { "d3d9.samplerAnisotropy",             "16" },
+    }} },
+
   };
 
 

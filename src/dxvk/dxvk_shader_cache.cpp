@@ -70,7 +70,7 @@ namespace dxvk {
 
 
   void DxvkShaderCache::addShader(Rc<DxvkIrShader> shader) {
-    if (!ensureStatus(Status::OpenReadWrite))
+    if (!ensureStatus(Status::OpenWriteOnly))
       return;
 
     LutKey k = { };
@@ -124,7 +124,7 @@ namespace dxvk {
     }
 
     if (openWriteOnlyLocked())
-      return Status::OpenReadWrite;
+      return Status::OpenWriteOnly;
 
     return Status::CacheDisabled;
   }
@@ -227,6 +227,21 @@ namespace dxvk {
       m_lut.insert_or_assign(k, e);
     }
 
+    auto cacheSize = m_binFile.size();;
+
+    std::stringstream message;
+    message << "Cache: " << m_lut.size() << " shaders (";
+
+    if (cacheSize >= (1ull << 20)) {
+      auto mib = (10ull * cacheSize) >> 20;
+      message << (mib / 10ull) << "." << (mib % 10ull) << " MB";
+    } else {
+      message << (cacheSize >> 10u) << " kB";
+    }
+
+    message << ")";
+
+    Logger::info(message.str());
     return true;
   }
 
@@ -403,6 +418,21 @@ namespace dxvk {
       layout.addSamplerHeap(binding);
     }
 
+    // Read spec data mappings
+    uint32_t specDataCount = 0u;
+
+    if (!read(stream, offset, specDataCount))
+      return false;
+
+    for (uint32_t i = 0u; i < specDataCount; i++) {
+      DxvkShaderBinding binding = { };
+
+      if (!read(stream, offset, binding))
+        return false;
+
+      layout.addSpecDataBuffer(binding);
+    }
+
     return true;
   }
 
@@ -449,23 +479,34 @@ namespace dxvk {
     bool stop = false;
 
     while (!stop) {
-      std::unique_lock lock(m_writeMutex);
+      bool drain = false;
 
-      m_writeCond.wait(lock, [this] {
-        return !m_writeQueue.empty();
-      });
+      while (!drain) {
+        std::unique_lock lock(m_writeMutex);
 
-      auto entry = std::move(m_writeQueue.front());
-      m_writeQueue.pop();
+        bool status = m_writeCond.wait_for(lock, std::chrono::seconds(10),
+          [this] { return !m_writeQueue.empty(); });
 
-      lock.unlock();
+        if (status) {
+          // Buffer shaders locally first so that we avoid hitting paths where this
+          // thread would compile the shader in place of any of the designated workers.
+          // This can still happen and is somewhat harmless, but should be rare.
+          Rc<DxvkIrShader> entry = std::move(m_writeQueue.front());
 
-      stop = !entry;
-      bool drain = stop;
+          if (entry) {
+            localQueue.push_back(std::move(entry));
+            drain = localQueue.size() == localQueue.capacity();
+          } else {
+            stop = true;
+            drain = true;
+          }
 
-      if (entry) {
-        localQueue.push_back(std::move(entry));
-        drain = localQueue.size() == localQueue.capacity();
+          m_writeQueue.pop();
+        } else {
+          // Write out pending shaders if we have timed out on the wait.
+          // They probably have finished compiling by this point anyway.
+          drain = !localQueue.empty();
+        }
       }
 
       if (drain) {
@@ -505,6 +546,11 @@ namespace dxvk {
 
     for (size_t i = 0u; i < layout.getSamplerHeapBindingCount(); i++)
       status = status && write(stream, layout.getSamplerHeapBinding(i));
+
+    status = status && write(stream, uint32_t(layout.getSpecDataBindingCount()));
+
+    for (size_t i = 0u; i < layout.getSpecDataBindingCount(); i++)
+      status = status && write(stream, layout.getSpecDataBinding(i));
 
     return status;
   }

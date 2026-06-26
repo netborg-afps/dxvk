@@ -716,23 +716,32 @@ namespace dxvk {
       VK_IMAGE_USAGE_SAMPLED_BIT |
       VK_IMAGE_USAGE_STORAGE_BIT |
       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+      VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+
+    // If we're not allowed to reinterpret the view type, behave
+    // as-if no resource was bound at all
+    if (!m_key.allowTypeMismatch && type != m_key.viewType)
+      return nullptr;
 
     // Legalize view usage. We allow creating transfer-only view
     // objects so that some internal APIs can be more consistent.
     DxvkImageViewKey key = m_key;
     key.viewType = type;
     key.layout = getLayout();
+    key.allowTypeMismatch = VK_FALSE;
 
     if (!(key.usage & ViewUsage))
       return nullptr;
 
     // If the image has feedback loops enabled, forward the required
     // usage flags to the view as well.
-    if ((m_image->info().usage & VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT)
-     && (key.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT))) {
-      key.usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT
-                |  VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (key.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+      if (m_image->info().usage & VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT)
+        key.usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+      if (m_image->info().usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)
+        key.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
     }
 
     // Only use one layer for non-arrayed view types

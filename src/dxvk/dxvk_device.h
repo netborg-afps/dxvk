@@ -32,7 +32,7 @@ namespace dxvk {
 
   class DxvkIrShader;
   class DxvkIrShaderConverter;
-  class DxvkIrShaderCreateInfo;
+  struct DxvkIrShaderCreateInfo;
 
   /**
    * \brief Device performance hints
@@ -45,6 +45,7 @@ namespace dxvk {
     VkBool32 preferPrimaryCmdBufs       : 1;
     VkBool32 preferComputeMipGen        : 1;
     VkBool32 preferDescriptorByteOffsets: 1;
+    VkBool32 preferCachedMemory         : 1;
   };
   
   /**
@@ -88,7 +89,7 @@ namespace dxvk {
       const Rc<DxvkInstance>&         instance,
       const Rc<DxvkAdapter>&          adapter,
       const Rc<vk::DeviceFn>&         vkd,
-      const DxvkDeviceFeatures&       features,
+      const DxvkDeviceCapabilities&   caps,
       const DxvkDeviceQueueSet&       queues,
       const DxvkQueueCallback&        queueCallback);
       
@@ -326,6 +327,14 @@ namespace dxvk {
      */
     bool hasCudaInterop() const {
       return m_features.nvxImageViewHandle;
+    }
+
+    /**
+     * \brief Queries set layout for spec constant data UBO
+     * \returns Legacy descriptor set layout for spec data
+     */
+    VkDescriptorSetLayout getSpecDataSetLayout() {
+      return m_objects.pipelineManager().getSpecDataSetLayout();
     }
 
     /**

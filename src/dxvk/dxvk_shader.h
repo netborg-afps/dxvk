@@ -9,8 +9,6 @@
 #include "dxvk_shader_io.h"
 
 #include "../spirv/spirv_code_buffer.h"
-#include "../spirv/spirv_compression.h"
-#include "../spirv/spirv_module.h"
 
 namespace dxvk {
   
@@ -18,26 +16,6 @@ namespace dxvk {
   class DxvkShaderModule;
   class DxvkPipelineManager;
   struct DxvkPipelineStats;
-
-  /**
-   * \brief Push data to handle built-ins
-   */
-  struct DxvkBuiltInPushData {
-    static constexpr uint32_t SampleCountOffset = 0u;
-    static constexpr uint32_t SampleCountBits = 8u;
-
-    static constexpr uint32_t MaxTessFactorOffset = SampleCountOffset + SampleCountBits;
-    static constexpr uint32_t MaxTessFactorBits = 8u;
-
-    DxvkBuiltInPushData() = default;
-
-    explicit DxvkBuiltInPushData(uint32_t sampleCount, uint32_t maxTessFactor)
-    : builtIns((sampleCount   << SampleCountOffset)
-             | (maxTessFactor << MaxTessFactorOffset)) { }
-
-    uint32_t builtIns = 0u;
-  };
-
 
   /**
    * \brief Shader compile flags
@@ -61,9 +39,9 @@ namespace dxvk {
     /// Whether the device supports 16-bit int and float
     /// arithmetic. Effectively enables min16 lowering.
     Supports16BitArithmetic     = 5u,
-    /// Whether 16-bit push data is supported. Used to
-    /// pack sampler indices in the binding model
-    Supports16BitPushData       = 6u,
+    /// Whether 16-bit and 8-bit push data is supported.
+    /// Used to pack sampler indices in the binding model.
+    SupportsSubDwordPushData    = 6u,
     /// Whether to lower unsigned int to float conversions.
     /// Needed to work around an Nvidia driver bug.
     LowerItoF                   = 7u,
@@ -83,6 +61,8 @@ namespace dxvk {
     LowerConstantArrays         = 11u,
     /// Whether to enable semantic-based I/O interface matching
     SemanticIo                  = 12u,
+    /// Whether to explicitly use BDA for fully-bound constant buffers.
+    LowerInBoundsCbvToBda       = 13u,
   };
 
   using DxvkShaderCompileFlags = Flags<DxvkShaderCompileFlag>;
@@ -132,6 +112,8 @@ namespace dxvk {
     /// Whether dynamic non-uniform resource indexing is
     /// supported. Only applies to typed resources.
     SupportsResourceIndexing    = 20u,
+    /// Whether descriptor heap is used as the binding model.
+    SupportsDescriptorHeap      = 21u,
   };
 
   using DxvkShaderSpirvFlags = Flags<DxvkShaderSpirvFlag>;
@@ -220,6 +202,7 @@ namespace dxvk {
   struct DxvkShaderLinkage {
     bool fsDualSrcBlend  = false;
     bool fsFlatShading   = false;
+    bool sampleLocations = false;
     bool semanticIo      = false;
 
     VkPrimitiveTopology inputTopology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;

@@ -28,6 +28,16 @@ namespace dxvk {
   using D3D11ShaderType = dxbc_spv::dxbc::ShaderType;
   using D3D11ShaderTypeFlags = Flags<dxbc_spv::dxbc::ShaderType>;
 
+  /** Hull shader push data */
+  struct D3D11HsPushData {
+    float maxTessFactor = 0.0f;
+  };
+
+  /** Specialization constants */
+  struct D3D11SpecData {
+    uint32_t sampleCount = 0u;
+  };
+
   /**
    * \brief Translates D3D11 shader stage to corresponding Vulkan stage
    *

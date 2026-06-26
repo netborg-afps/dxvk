@@ -12,7 +12,7 @@ namespace dxvk {
     const Rc<DxvkInstance>&         instance,
     const Rc<DxvkAdapter>&          adapter,
     const Rc<vk::DeviceFn>&         vkd,
-    const DxvkDeviceFeatures&       features,
+    const DxvkDeviceCapabilities&   caps,
     const DxvkDeviceQueueSet&       queues,
     const DxvkQueueCallback&        queueCallback)
   : m_options           (instance->options()),
@@ -21,8 +21,8 @@ namespace dxvk {
     m_vkd               (vkd),
     m_debugFlags        (instance->debugFlags()),
     m_queues            (queues),
-    m_features          (features),
-    m_properties        (adapter->deviceProperties()),
+    m_features          (caps.getFeatures()),
+    m_properties        (caps.getProperties()),
     m_perfHints         (getPerfHints()),
     m_objects           (this),
     m_submissionQueue   (this, queueCallback) {
@@ -378,6 +378,14 @@ namespace dxvk {
     // Attachment format infos, useful to set up state
     auto depthFormatInfo = lookupFormatInfo(state.depthFormat);
 
+    // Find highest non-null color attachment
+    uint32_t colorAttachmentCount = 0u;
+
+    for (uint32_t i = 0u; i < MaxNumRenderTargets; i++) {
+      if (state.colorFormats[i])
+        colorAttachmentCount = i + 1u;
+    }
+
     // Default vertex input state
     VkPipelineVertexInputStateCreateInfo viState = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 
@@ -429,16 +437,16 @@ namespace dxvk {
     }
 
     // Default blend state, only used if color attachments are present
-    VkPipelineColorBlendAttachmentState cbAttachment = { };
-    cbAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-                                | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    std::array<VkPipelineColorBlendAttachmentState, MaxNumRenderTargets> cbAttachments = { };
+
+    for (auto& cbAttachment : cbAttachments) {
+      cbAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                                  | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    }
 
     VkPipelineColorBlendStateCreateInfo cbState = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-
-    if (state.colorFormat) {
-      cbState.attachmentCount = 1u;
-      cbState.pAttachments = state.cbAttachment ? state.cbAttachment : &cbAttachment;
-    }
+    cbState.attachmentCount = colorAttachmentCount;
+    cbState.pAttachments = state.cbAttachment ? state.cbAttachment : cbAttachments.data();
 
     // Prepare dynamic states
     small_vector<VkDynamicState, 4> dynamicStates;
@@ -455,9 +463,9 @@ namespace dxvk {
     // Build rendering attachment info
     VkPipelineRenderingCreateInfo renderingInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
 
-    if (state.colorFormat) {
-      renderingInfo.colorAttachmentCount = 1u;
-      renderingInfo.pColorAttachmentFormats = &state.colorFormat;
+    if (colorAttachmentCount) {
+      renderingInfo.colorAttachmentCount = colorAttachmentCount;
+      renderingInfo.pColorAttachmentFormats = state.colorFormats.data();
     }
 
     if (state.depthFormat && (depthFormatInfo->aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT))
@@ -483,7 +491,7 @@ namespace dxvk {
     pipelineInfo.pRasterizationState = state.rsState ? state.rsState : &rsState;
     pipelineInfo.pMultisampleState = &msState;
     pipelineInfo.pDepthStencilState = state.depthFormat ? (state.dsState ? state.dsState : &dsState) : nullptr;
-    pipelineInfo.pColorBlendState = state.colorFormat ? &cbState : nullptr;
+    pipelineInfo.pColorBlendState = colorAttachmentCount ? &cbState : nullptr;
     pipelineInfo.pDynamicState = &dyState;
     pipelineInfo.layout = layout->getPipelineLayout();
     pipelineInfo.basePipelineIndex = -1;
@@ -735,6 +743,7 @@ namespace dxvk {
 
     applyTristate(tilerMode, m_options.tilerMode);
     hints.preferRenderPassOps = tilerMode;
+    hints.preferCachedMemory = tilerMode;
 
     // Honeykrisp does not have native support for secondary command buffers
     // and would suffer from added CPU overhead, so be less aggressive.
@@ -749,7 +758,7 @@ namespace dxvk {
     // (GFX10+) for now, where it is proven to work.
     hints.preferComputeMipGen = (m_adapter->matchesDriver(VK_DRIVER_ID_NVIDIA_PROPRIETARY_KHR)
                              || (m_adapter->matchesDriver(VK_DRIVER_ID_MESA_RADV)
-                              && m_adapter->deviceProperties().vk13.minSubgroupSize == 32u));
+                              && m_properties.vk13.minSubgroupSize == 32u));
 
     // On AMD we can expect it to be optimal to simply pass the heap offset
     // to descriptor memory through as-is to avoid some ALU. Some other
@@ -771,13 +780,11 @@ namespace dxvk {
     m_shaderOptions.minStorageBufferAlignment =
       m_properties.core.properties.limits.minStorageBufferOffsetAlignment;
 
-    if (m_features.core.features.shaderInt16 && m_features.vk12.shaderFloat16)
+    if (m_features.vk12.shaderFloat16)
       m_shaderOptions.flags.set(DxvkShaderCompileFlag::Supports16BitArithmetic);
 
-    // RADV currently does not emit great code with 16-bit sampler indices
-    if (m_features.core.features.shaderInt16 && m_features.vk11.storagePushConstant16
-     && !m_adapter->matchesDriver(VK_DRIVER_ID_MESA_RADV))
-      m_shaderOptions.flags.set(DxvkShaderCompileFlag::Supports16BitPushData);
+    if (m_features.vk11.storagePushConstant16 && m_features.vk12.storagePushConstant8)
+      m_shaderOptions.flags.set(DxvkShaderCompileFlag::SupportsSubDwordPushData);
 
     // Need to tag typed storage image loads with the format on some devices
     auto r32Features = getFormatFeatures(VK_FORMAT_R32_SFLOAT).optimal
@@ -802,6 +809,12 @@ namespace dxvk {
         DxvkShaderCompileFlag::LowerFtoI,
         DxvkShaderCompileFlag::LowerF32toF16);
     }
+
+    // On AMD, push constant BDA will not be worse than going through a descriptor
+    if (m_adapter->matchesDriver(VK_DRIVER_ID_MESA_RADV)
+     || m_adapter->matchesDriver(VK_DRIVER_ID_AMD_OPEN_SOURCE)
+     || m_adapter->matchesDriver(VK_DRIVER_ID_AMD_PROPRIETARY))
+      m_shaderOptions.flags.set(DxvkShaderCompileFlag::LowerInBoundsCbvToBda);
 
     // Converting unsigned integers to float should return an unsigned float,
     // but Nvidia drivers prior to 580 don't agree
@@ -876,6 +889,9 @@ namespace dxvk {
 
     if (m_features.khrShaderFloatControls2.shaderFloatControls2)
       m_shaderOptions.spirv.set(DxvkShaderSpirvFlag::SupportsFloatControls2);
+
+    if (canUseDescriptorHeap())
+      m_shaderOptions.spirv.set(DxvkShaderSpirvFlag::SupportsDescriptorHeap);
 
     // Set up resource indexing flags
     if (m_features.core.features.shaderUniformBufferArrayDynamicIndexing &&

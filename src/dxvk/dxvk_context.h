@@ -960,9 +960,7 @@ namespace dxvk {
             uint32_t                  offset,
             uint32_t                  size,
       const void*                     data) {
-      uint32_t index = DxvkPushDataBlock::computeIndex(stages);
-
-      uint32_t baseOffset = computePushDataBlockOffset(index);
+      uint32_t baseOffset = DxvkPushDataBlock::computeBlockOffsetForStage(stages);
       std::memcpy(&m_state.pc.constantData[baseOffset + offset], data, size);
 
       m_flags.set(DxvkContextFlag::DirtyPushData);
@@ -1024,16 +1022,20 @@ namespace dxvk {
     /**
      * \brief Uses transfer queue to initialize buffer
      *
-     * Always replaces the entire buffer. Only safe to use
-     * if the buffer is currently not in use by the GPU.
+     * Must only be use if the given buffer region is
+     * not currently in use by the GPU.
      * \param [in] buffer The buffer to initialize
+     * \param [in] bufferOffset Buffer offset
      * \param [in] source Staging buffer containing data
      * \param [in] sourceOffset Offset into staging buffer
+     * \param [in] size Number of bytes to copy
      */
     void uploadBuffer(
       const Rc<DxvkBuffer>&           buffer,
+            VkDeviceSize              bufferOffset,
       const Rc<DxvkBuffer>&           source,
-            VkDeviceSize              sourceOffset);
+            VkDeviceSize              sourceOffset,
+            VkDeviceSize              size);
     
     /**
      * \brief Uses transfer queue to initialize image
@@ -1173,29 +1175,27 @@ namespace dxvk {
       const DxvkBlendMode&      blendMode);
     
     /**
-     * \brief Sets specialization constants
+     * \brief Sets specialization constant data
      * 
-     * Replaces current specialization constants
-     * with the given list of constant entries.
-     * \param [in] pipeline Graphics or Compute pipeline
+     * \param [in] pipeline Pipeline bind point
      * \param [in] index Constant index
-     * \param [in] value Constant value
+     * \param [in] count Constant count
+     * \param [in] data Pointer to specialization data
      */
-    void setSpecConstant(
+    void setSpecConstants(
             VkPipelineBindPoint pipeline,
             uint32_t            index,
-            uint32_t            value) {
+            uint32_t            count,
+      const void*               data) {
       auto& scState = pipeline == VK_PIPELINE_BIND_POINT_GRAPHICS
         ? m_state.gp.constants : m_state.cp.constants;
-      
-      if (scState.data[index] != value) {
-        scState.data[index] = value;
 
-        if (scState.mask & (1u << index)) {
-          m_flags.set(pipeline == VK_PIPELINE_BIND_POINT_GRAPHICS
-            ? DxvkContextFlag::GpDirtySpecConstants
-            : DxvkContextFlag::CpDirtySpecConstants);
-        }
+      uint32_t dirtyMask = bit::bcndcpy(&scState.data[index], data, count);
+
+      if (scState.mask & dirtyMask) {
+        m_flags.set(pipeline == VK_PIPELINE_BIND_POINT_GRAPHICS
+          ? DxvkContextFlag::GpDirtySpecConstants
+          : DxvkContextFlag::CpDirtySpecConstants);
       }
     }
     
@@ -1337,6 +1337,10 @@ namespace dxvk {
     DxvkObjects*            m_common;
 
     uint64_t                m_trackingId = 0u;
+    uint64_t                m_submitWaitId = 0u;
+    uint64_t                m_submitLastId = 0u;
+    Rc<DxvkFence>           m_trackingFence;
+
     uint32_t                m_renderPassIndex = 0u;
     uint32_t                m_unsynchronizedDrawCount = 0u;
 
@@ -1506,6 +1510,15 @@ namespace dxvk {
       const Rc<DxvkImage>&        srcImage,
             VkImageSubresourceLayers srcSubresource);
 
+    bool copyImageInline(
+            DxvkImage&            dstImage,
+            VkImageSubresourceLayers dstSubresource,
+            VkOffset3D            dstOffset,
+            DxvkImage&            srcImage,
+            VkImageSubresourceLayers srcSubresource,
+            VkOffset3D            srcOffset,
+            VkExtent3D            extent);
+
     template<bool ToBuffer>
     void copySparsePages(
       const Rc<DxvkPagedResource>& sparse,
@@ -1653,6 +1666,8 @@ namespace dxvk {
             VkRenderingAttachmentInfo&  attachment,
             DxvkAccess                  access) const;
 
+    void adjustRenderArea(const VkRect2D& rect);
+
     void beginRenderPass();
     void endRenderPass(bool suspend);
 
@@ -1738,6 +1753,10 @@ namespace dxvk {
       const VkImageSubresourceRange& subresources);
 
     bool isBoundAsRenderTarget(
+      const DxvkImage&              image,
+      const VkImageSubresourceRange& subresources);
+
+    int32_t findColorAttachmentIndex(
       const DxvkImage&              image,
       const VkImageSubresourceRange& subresources);
 
@@ -1932,6 +1951,7 @@ namespace dxvk {
     void prepareSharedImages();
 
     bool transitionImageLayout(
+            DxvkCmdBuffer             cmdBuffer,
             DxvkImage&                image,
       const VkImageSubresourceRange&  subresources,
             VkPipelineStageFlags2     srcStages,
@@ -2132,13 +2152,15 @@ namespace dxvk {
             size_t                    accessCount,
       const DxvkResourceAccess*       accessBatch);
 
-    bool prepareOutOfOrderTransfer(
+    DxvkCmdBuffer prepareOutOfOrderTransfer(
+            DxvkCmdBuffer             cmdBuffer,
             DxvkBuffer&               buffer,
             VkDeviceSize              offset,
             VkDeviceSize              size,
             DxvkAccess                access);
 
-    bool prepareOutOfOrderTransfer(
+    DxvkCmdBuffer prepareOutOfOrderTransfer(
+            DxvkCmdBuffer             cmdBuffer,
             DxvkImage&                image,
       const VkImageSubresourceRange&  subresources,
             bool                      discard,
@@ -2252,10 +2274,6 @@ namespace dxvk {
     bool formatsAreImageCopyCompatible(
             VkFormat                  dstFormat,
             VkFormat                  srcFormat);
-
-    static uint32_t computePushDataBlockOffset(uint32_t index) {
-      return index ? MaxSharedPushDataSize + MaxPerStagePushDataSize * (index - 1u) : 0u;
-    }
 
     static VkStencilOpState convertStencilOp(
       const DxvkStencilOp&            op,

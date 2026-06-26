@@ -51,7 +51,7 @@ namespace dxvk {
 
         if (adapter != nullptr) {
           const auto* d3d9On12Args = Find9On12Args(adapter, pOverrideList, OverrideCount);
-          m_adapters.emplace_back(this, d3d9On12Args, adapter, adapterOrdinal++, i - 1);
+          m_adapters.emplace_back(new D3D9Adapter(this, d3d9On12Args, m_instance, adapter, adapterOrdinal++, i - 1));
         }
       }
     }
@@ -63,7 +63,7 @@ namespace dxvk {
 
       for (uint32_t i = 0; i < adapterCount; i++) {
         const auto* d3d9On12Args = Find9On12Args(m_instance->enumAdapters(i), pOverrideList, OverrideCount);
-        m_adapters.emplace_back(this, d3d9On12Args, m_instance->enumAdapters(i), i, 0);
+        m_adapters.emplace_back(new D3D9Adapter(this, d3d9On12Args, m_instance, m_instance->enumAdapters(i), i, 0));
       }
     }
 
@@ -535,15 +535,15 @@ namespace dxvk {
 #ifdef _WIN32
     for (uint32_t i = 0u; i < OverrideCount; i++) {
       if (pOverrides[i].pD3D12Device) {
-        const auto& vk11 = Adapter->deviceProperties().vk11;
+        auto info = Adapter->info();
 
-        if (vk11.deviceLUIDValid) {
+        if (info.luidIsValid) {
           Com<ID3D12Device> device = nullptr;
 
           if (SUCCEEDED(pOverrides[i].pD3D12Device->QueryInterface(__uuidof(ID3D12Device), reinterpret_cast<void**>(&device)))) {
             LUID luid = device->GetAdapterLuid();
 
-            if (!std::memcmp(&luid, vk11.deviceLUID, sizeof(vk11.deviceLUID)))
+            if (!std::memcmp(&luid, info.deviceLuid, sizeof(info.deviceLuid)))
               arg = &pOverrides[i];
           }
         }

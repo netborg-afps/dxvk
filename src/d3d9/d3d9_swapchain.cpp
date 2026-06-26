@@ -1105,7 +1105,6 @@ namespace dxvk {
         }
       }
 
-      hud->addItem<hud::HudFixedFunctionShaders>("ffshaders", -1, m_parent);
       hud->addItem<hud::HudSWVPState>("swvp", -1, m_parent);
 
 #ifdef D3D9_ALLOW_UNMAPPING
@@ -1201,10 +1200,10 @@ namespace dxvk {
 
       case D3D9Format::X1R5G5B5:
       case D3D9Format::A1R5G5B5:
-        return { VK_FORMAT_B5G5R5A1_UNORM_PACK16, m_colorspace };
+        return { VK_FORMAT_A1R5G5B5_UNORM_PACK16, m_colorspace };
 
       case D3D9Format::R5G6B5:
-        return { VK_FORMAT_B5G6R5_UNORM_PACK16, m_colorspace };
+        return { VK_FORMAT_R5G6B5_UNORM_PACK16, m_colorspace };
 
       case D3D9Format::A16B16G16R16F: {
         if (!m_parent->HasFormatsUnlocked()) {
