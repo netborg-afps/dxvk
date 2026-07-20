@@ -3,12 +3,12 @@
 #include "d3d9_format.h"
 #include "d3d9_util.h"
 #include "d3d9_caps.h"
-#include "d3d9_mem.h"
 #include "d3d9_interop.h"
 
 #include "../dxvk/dxvk_device.h"
 
 #include "../util/util_bit.h"
+#include "../util/util_unmap.h"
 
 namespace dxvk {
 
@@ -254,7 +254,7 @@ namespace dxvk {
     }
 
     void UnmapData() {
-      m_data.Unmap();
+      m_data.unmap();
     }
 
     /**
@@ -504,7 +504,7 @@ namespace dxvk {
     Rc<DxvkImage>                 m_image;
     Rc<DxvkImage>                 m_resolveImage;
     Rc<DxvkBuffer>                m_buffer;
-    D3D9Memory                    m_data = { };
+    MemoryFileRegion              m_data = { };
 
     D3D9SubresourceArray<
       uint64_t>                   m_seqs = { };

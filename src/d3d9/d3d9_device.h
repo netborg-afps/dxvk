@@ -12,7 +12,6 @@
 #include "d3d9_constant_buffer.h"
 #include "d3d9_constant_copy.h"
 #include "d3d9_constant_set.h"
-#include "d3d9_mem.h"
 
 #include "d3d9_state.h"
 
@@ -35,6 +34,7 @@
 
 #include "../util/util_flush.h"
 #include "../util/util_lru.h"
+#include "../util/util_unmap.h"
 
 namespace dxvk {
 
@@ -1106,7 +1106,7 @@ namespace dxvk {
     /**
      * \brief Returns the allocator used for unmappable system memory texture data
      */
-    D3D9MemoryAllocator* GetAllocator() {
+    MemoryFilePool* GetAllocator() {
       return &m_memoryAllocator;
     }
 
@@ -1570,12 +1570,12 @@ namespace dxvk {
     D3D9Adapter*                    m_adapter;
     Rc<DxvkDevice>                  m_dxvkDevice;
 
-    D3D9MemoryAllocator             m_memoryAllocator;
+    MemoryFilePool                  m_memoryAllocator;
 
     // Second memory allocator used for D3D9 shader bytecode.
     // Most games never access the stored bytecode, so putting that
     // into the same chunks as texture memory would waste address space.
-    D3D9MemoryAllocator             m_shaderAllocator;
+    MemoryFilePool                  m_shaderAllocator;
 
     uint32_t                        m_frameLatency = DefaultFrameLatency;
 
@@ -1681,7 +1681,7 @@ namespace dxvk {
 
     D3D9SwapChainEx*                m_mostRecentlyUsedSwapchain = nullptr;
 
-#ifdef D3D9_ALLOW_UNMAPPING
+#ifdef DXVK_USE_UNMAPPABLE_MEMORY
     lru_list<D3D9CommonTexture*>    m_mappedTextures;
 #endif
 

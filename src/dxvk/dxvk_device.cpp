@@ -25,6 +25,7 @@ namespace dxvk {
     m_properties        (caps.getProperties()),
     m_perfHints         (getPerfHints()),
     m_objects           (this),
+    m_checkpoints       (this),
     m_submissionQueue   (this, queueCallback) {
 
     if (adapter->kmtLocal()) {
@@ -119,16 +120,6 @@ namespace dxvk {
     return m_features.extGraphicsPipelineLibrary.graphicsPipelineLibrary
         && m_properties.extGraphicsPipelineLibrary.graphicsPipelineLibraryIndependentInterpolationDecoration
         && m_options.enableGraphicsPipelineLibrary != Tristate::False;
-  }
-
-
-  bool DxvkDevice::canUsePipelineCacheControl() const {
-    // Don't bother with this unless the device also supports shader module
-    // identifiers, since decoding and hashing the shaders is slow otherwise
-    // and likely provides no benefit over linking pipeline libraries.
-    return m_features.vk13.pipelineCreationCacheControl
-        && m_features.extShaderModuleIdentifier.shaderModuleIdentifier
-        && m_options.enableGraphicsPipelineLibrary != Tristate::True;
   }
 
 
@@ -744,14 +735,6 @@ namespace dxvk {
     applyTristate(tilerMode, m_options.tilerMode);
     hints.preferRenderPassOps = tilerMode;
     hints.preferCachedMemory = tilerMode;
-
-    // Honeykrisp does not have native support for secondary command buffers
-    // and would suffer from added CPU overhead, so be less aggressive.
-    // TODO: Enable ANV once mesa issue 12791 is resolved.
-    // RADV has issues on RDNA4 up to version 25.0.1.
-    hints.preferPrimaryCmdBufs = m_adapter->matchesDriver(VK_DRIVER_ID_MESA_HONEYKRISP)
-                              || m_adapter->matchesDriver(VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA)
-                              || m_adapter->matchesDriver(VK_DRIVER_ID_MESA_RADV, Version(), Version(25, 0, 2));
 
     // Compute-based mip generation has some potential for performance
     // regressions or driver issues. Just enable it on Nvidia and RADV

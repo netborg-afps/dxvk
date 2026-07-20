@@ -1317,7 +1317,7 @@ namespace dxvk {
     const DxvkBufferImportInfo&       importInfo) {
     Rc<DxvkResourceAllocation> allocation = m_allocationPool.create(this, nullptr);
     allocation->m_flags.set(DxvkAllocationFlag::Imported);
-    allocation->m_resourceCookie = allocation->m_resourceCookie;
+    allocation->m_resourceCookie = allocationInfo.resourceCookie;
     allocation->m_size = createInfo.size;
     allocation->m_mapPtr = importInfo.mapPtr;
     allocation->m_buffer = importInfo.buffer;
@@ -1336,7 +1336,7 @@ namespace dxvk {
           VkImage                     imageHandle) {
     Rc<DxvkResourceAllocation> allocation = m_allocationPool.create(this, nullptr);
     allocation->m_flags.set(DxvkAllocationFlag::Imported);
-    allocation->m_resourceCookie = allocation->m_resourceCookie;
+    allocation->m_resourceCookie = allocationInfo.resourceCookie;
     allocation->m_image = imageHandle;
 
     return allocation;
@@ -2401,7 +2401,25 @@ namespace dxvk {
 
   uint32_t DxvkMemoryAllocator::getMemoryTypeMask(
           VkMemoryPropertyFlags properties) const {
-    return m_memTypesByPropertyFlags[uint32_t(properties) % uint32_t(m_memTypesByPropertyFlags.size())];
+    uint32_t index = uint32_t(properties);
+    uint32_t count = uint32_t(m_memTypesByPropertyFlags.size());
+
+    if (likely(index < count))
+      return m_memTypesByPropertyFlags[index];
+
+    // If we get asked for uncommon memory properties, scan
+    // memory types for the requested flags
+    uint32_t mask = 0u;
+
+    for (uint32_t i = 0u; i < m_memTypes.size(); i++) {
+      if ((m_memTypes[i].properties.propertyFlags & properties) == properties)
+        mask |= 1u << i;
+    }
+
+    if (!mask)
+      mask = m_memTypesByPropertyFlags[index % count];
+
+    return mask;
   }
 
 

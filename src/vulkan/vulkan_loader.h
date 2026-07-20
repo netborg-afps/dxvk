@@ -530,6 +530,22 @@ namespace dxvk::vk {
     VULKAN_FN(wine_vkReleaseKeyedMutex);
     #endif
 
+    #ifdef VK_KHR_device_fault
+    VULKAN_FN(vkGetDeviceFaultReportsKHR);
+    VULKAN_FN(vkGetDeviceFaultDebugInfoKHR);
+    #endif
+
+    #ifdef VK_AMD_buffer_marker
+    VULKAN_FN(vkCmdWriteBufferMarkerAMD);
+    VULKAN_FN(vkCmdWriteBufferMarker2AMD);
+    #endif
+
+    #ifdef VK_NV_device_diagnostic_checkpoints
+    VULKAN_FN(vkCmdSetCheckpointNV);
+    VULKAN_FN(vkGetQueueCheckpointDataNV);
+    VULKAN_FN(vkGetQueueCheckpointData2NV);
+    #endif
+
     #ifdef VK_NV_low_latency2
     VULKAN_FN(vkSetLatencySleepModeNV);
     VULKAN_FN(vkLatencySleepNV);

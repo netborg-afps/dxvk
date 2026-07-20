@@ -567,7 +567,7 @@ namespace dxvk {
      * \returns Sequence number of last executed chunk
      */
     uint64_t lastSequenceNumber() const {
-      return m_seqOrdered.load(std::memory_order_acquire);
+      return m_seqOrdered.load();
     }
 
   private:

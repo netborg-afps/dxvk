@@ -13,6 +13,7 @@
 namespace dxvk {
   
   class DxvkDevice;
+  class DxvkCheckpointBuffer;
 
   /**
    * \brief Submission status
@@ -196,6 +197,7 @@ namespace dxvk {
   private:
 
     DxvkDevice*                 m_device;
+    DxvkCheckpointBuffer*       m_checkpoints = nullptr;
     DxvkQueueCallback           m_callback;
 
     DxvkTimelineSemaphores      m_semaphores;
