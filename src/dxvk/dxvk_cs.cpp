@@ -63,44 +63,35 @@ namespace dxvk {
   
   
   DxvkCsChunkPool::~DxvkCsChunkPool() {
-    DxvkCsChunk* chunk = m_stackTop.load();
-
-    while (chunk != nullptr) {
-      DxvkCsChunk* temp = chunk;
-      chunk = chunk->m_nextCached;
-      delete temp;
-    }
+    for (DxvkCsChunk* chunk : m_chunks)
+      delete chunk;
   }
   
   
   DxvkCsChunk* DxvkCsChunkPool::allocChunk(DxvkCsChunkFlags flags) {
-    DxvkCsChunk* stackTop = m_stackTop.load( std::memory_order_acquire );
+    DxvkCsChunk* chunk = nullptr;
 
-    do {
-      if (unlikely(stackTop == nullptr)) {
-        DxvkCsChunk* chunk = new DxvkCsChunk();
-        chunk->init(flags);
-        return chunk;
+    { std::lock_guard<dxvk::mutex> lock(m_mutex);
+      
+      if (m_chunks.size() != 0) {
+        chunk = m_chunks.back();
+        m_chunks.pop_back();
       }
-    } while (!m_stackTop.compare_exchange_weak( stackTop, stackTop->m_nextCached,
-        std::memory_order_release,
-        std::memory_order_acquire));
-
-    stackTop->m_nextCached = nullptr;
-    stackTop->init(flags);
-    return stackTop;
+    }
+    
+    if (!chunk)
+      chunk = new DxvkCsChunk();
+    
+    chunk->init(flags);
+    return chunk;
   }
   
   
   void DxvkCsChunkPool::freeChunk(DxvkCsChunk* chunk) {
     chunk->reset();
-    DxvkCsChunk* stackTop = m_stackTop.load( std::memory_order_acquire );
-
-    do {
-      chunk->m_nextCached = stackTop;
-    } while (!m_stackTop.compare_exchange_weak( stackTop, chunk,
-        std::memory_order_release,
-        std::memory_order_acquire));
+    
+    std::lock_guard<dxvk::mutex> lock(m_mutex);
+    m_chunks.push_back(chunk);
   }
   
   
