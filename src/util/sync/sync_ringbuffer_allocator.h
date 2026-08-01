@@ -35,6 +35,7 @@ namespace dxvk::sync {
         // safe guard, but this allocator is not meant to hit this condition
         if (unlikely(desired.allocCount > size)) {
           checkThrowError(allocTime);
+          expected = m_indices.load();
           continue;
         }
 
