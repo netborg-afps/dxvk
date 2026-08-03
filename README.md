@@ -6,7 +6,7 @@ Enhances the original [dxvk](https://github.com/doitsujin/dxvk) with low-latency
 
 - There is no need for configuration, but fine-tuning is possible via config options
 - Set `DXVK_FRAME_RATE=225` and `DXVK_FRAME_PACE=low-latency-vrr-235` for 240 Hz VRR gaming
-- Usage of [sched_ext](https://wiki.cachyos.org/configuration/sched-ext/) schedulers recommended for improved performance. If you don't know which to pick, `scx_cosmos -c 0 -p 0` is usually performing really well
+- Usage of [sched_ext](https://wiki.cachyos.org/configuration/sched-ext/) schedulers recommended for improved performance. If you don't know which to pick, `scx_cosmos -c 0 -p 0` is usually performing really well. The mainline EEVDF scheduler has improved massively recently, so this recommendation may become unnecessary in the future.
 
 ### Installation
 
@@ -75,6 +75,18 @@ Can be set to `False` on a game by game basis. By default, this option is set to
 This setting also can be seen as a workaround for the last mandatory feature which still needs to get implemented: Integrate the CS processing timings (/logic) into the pacing.
 
 ### Additional considerations
+
+#### Online Multiplayer & Anti-Cheat Compatibility
+
+The original dxvk project has a disclaimer in their readme (see below) to limit their liability in case some anti-cheat triggers false positives. I won't accept liability either, so **use at your own risk**, but I think there is more to say.
+
+My work is definitely designed and intended to also be used in multiplayer games. There are no added features affecting the competitive integrity. All it does is provide enhanced low-latency frame pacing on top of upstream dxvk. 
+
+Don't use this project on Windows with anti-cheat games. But on Linux, we have a completely different situation. We don't have manufacturer-signed D3D DLLs. We fundamentally depend on dxvk to achieve the high frame rates required for these games.
+
+Using hashes to check for whitelisted DLLs doesn't seem like a good strategy for anti-cheats, as we're pretty much forced to use custom Proton versions either way to get native Wayland support. The same source code can lead to different hashes every time the code is compiled for a new custom Proton release. 
+
+This fork is, just like upstream dxvk, a clean implementation of D3D. There are no injections or modifications happening to game executables and game DLLs.
 
 #### Frame pipelining
 
